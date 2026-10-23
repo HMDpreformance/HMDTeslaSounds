@@ -297,6 +297,12 @@ body.fs .cluster { border: 0; background: transparent; }
           <button id="flyLight" aria-pressed="false">Light race</button>
         </div>
         <span></span>
+        <span>Cam</span>
+        <div class="seg" role="group" aria-label="Camshaft" style="justify-self:start">
+          <button id="camStock" aria-pressed="true">Stock</button>
+          <button id="camRace" aria-pressed="false">Race cam</button>
+        </div>
+        <span></span>
         <span>Units</span>
         <div class="seg" role="group" aria-label="Speed units" style="justify-self:start">
           <button id="uKmh" aria-pressed="true">km/h</button>
@@ -852,7 +858,7 @@ class EngineDSP {
     this.n1 = 0; this.n2 = 0; this.mech = 0; this.mx = 0;
     this.smoothK = 1 - Math.exp(-2 * Math.PI * cfg.smooth / fs);
     this.noiseK = 1 - Math.exp(-2 * Math.PI * 2200 / fs);
-    this.target = { rpm: 0, load: 0, cut: 0, pop: 0, retard: 0, mis: 0 };
+    this.target = { rpm: 0, load: 0, cut: 0, pop: 0, retard: 0, mis: 0, cam: 0 }; this.lope = 0;
     this.blasts = []; this.queue = [];
   }
   // Afterfire: unburnt fuel lights off in the hot exhaust. The pressure wave is a Friedlander blast
@@ -875,7 +881,10 @@ class EngineDSP {
     // slow idle hunting, strongest with a lumpy cam at closed throttle
     this.huntV += (this.rnd() * 2 - 1) * 0.6 - this.hunt * 0.02 - this.huntV * 0.08;
     this.hunt += this.huntV * 0.05;
-    const huntRpm = this.hunt * cfg.vary * 120 * (1 - load) * Math.max(0, 1 - t.rpm / 3500);
+    // race cam: big valve overlap makes the idle lope, a slow surge with weak and fat cycles mixed in
+    const camK = (t.cam || 0) * (1 - load) * Math.max(0, Math.min(1, 1.6 - t.rpm / 2500));
+    this.lope += 2 * Math.PI * 1.5 * len / fs; if (this.lope > 2 * Math.PI) this.lope -= 2 * Math.PI;
+    const huntRpm = this.hunt * cfg.vary * 120 * (1 - load) * Math.max(0, 1 - t.rpm / 3500) + camK * (190 * Math.sin(this.lope) + this.hunt * 90);
     for (let s = 0; s < len; s++) {
       this.rpm += (t.rpm - this.rpm) * 0.0015;
       const rpm = Math.max(0, this.rpm + huntRpm);
@@ -900,6 +909,11 @@ class EngineDSP {
             const v = cfg.vary * (1 - 0.6 * load);
             let a = (cfg.base + (1 - cfg.base) * load) * (1 + v * (this.rnd() * 2 - 1));
             if (this.rnd() < v * 0.08) a *= 0.35; // the odd weak burn at idle
+            if (camK > 0) { // overlap: some cycles are diluted and weak, the next one fat and loud
+              const r = this.rnd();
+              if (r < (0.2 + 0.25 * Math.max(0, -Math.sin(this.lope))) * camK) { a *= 0.2; if (this.rnd() < 0.1) this.blast(this.L[i] + this.rnd() * 200, 0.35 + 0.4 * this.rnd(), 0.0015, cfg.banks[i]); }
+              else a *= 1 + camK * (0.3 + 0.7 * this.rnd()) * (0.5 + 0.5 * Math.sin(this.lope));
+            }
             this.amp[i] = a * this.gain[i] * (1 + 0.5 * t.retard);
             // retarded spark: some charges are still burning when the valve opens
             if (t.retard > 0 && this.rnd() < t.retard * 0.1) this.blast(this.L[i] + this.rnd() * 200, 0.8 + 0.7 * this.rnd(), 0.002 + 0.003 * this.rnd(), cfg.banks[i]);
@@ -1170,7 +1184,7 @@ class EngineSound {
     this.nodes.push(this.e1, this.e2, this.e3, this.hum);
     this.nodes.forEach((n) => n.start(t));
   }
-  update(rpm, thr, mul, cut, bang, retard = 0, mis = 0) {
+  update(rpm, thr, mul, cut, bang, retard = 0, mis = 0, cam = 0) {
     const car = this.car, t = ctx.currentTime;
     const rn = clamp(rpm / car.redline, 0, 1.05);
     if (car.ev) {
@@ -1187,7 +1201,7 @@ class EngineSound {
     // overrun crackle: aim for roughly a dozen pops a second, not one per firing
     const perSec = Math.max(1, rpm / 120 * cfg.offsets.length);
     const pop = bang > 0 ? bang : (t < this.popUntil && thr < 0.15 ? clamp(14 * (car.pops || 0) / perSec, 0, 0.5) : 0);
-    this.send({ rpm, load: thr, cut: cut ? 1 : 0, pop, retard, mis });
+    this.send({ rpm, load: thr, cut: cut ? 1 : 0, pop, retard, mis, cam });
     // retarded timing on the limiter: flames in the header, so open the filter and push the drive
     this.lp.frequency.setTargetAtTime(cfg.lp[0] + rpm * cfg.lp[1] + thr * cfg.lp[2] + retard * 1500, t, 0.01);
     this.bangGain.gain.setTargetAtTime(mul * 0.9, t, 0.03);
@@ -1320,6 +1334,7 @@ const state = {
   carIdx: clamp(store.get("car", 0), 0, CARS.length - 1),
   units: store.get("units", "kmh"),
   fly: store.get("fly", "stock"),
+  cam: store.get("cam", "stock"),
   volume: store.get("vol", 0.8),
   sens: store.get("sens", 1),
   agg: store.get("agg", 2.5),
@@ -1465,7 +1480,7 @@ function step(dt) {
 
   // 4. engine speed (cold idle runs high for a few seconds after start-up)
   state.warm = state.engine === "on" ? (state.warm || 0) * Math.exp(-dt / 4) : (state.warm || 0);
-  const idleNow = c.idle * (1 + (state.warm || 0));
+  const idleNow = c.idle * (1 + (state.warm || 0)) * (state.cam === "race" && !c.ev ? 1.2 : 1); // a big cam needs a higher idle
   let target;
   if (state.engine === "off") target = 0;
   else if (state.engine === "starting") {
@@ -1548,7 +1563,7 @@ function step(dt) {
     }
     if (state.engine === "starting" && now >= state.startAt) mis = 0.4 * Math.exp(-(now - state.startAt) * 1.5); // stumbles as it catches
     if (state.engine === "on" && !c.ev) { const w = clamp((state.warm || 0) / 0.28, 0, 1); mis = Math.max(mis, 0.28 * w * w * w + 0.03 * w); } // cold: the odd miss
-    snd.update(Math.max(0, state.rpm), thrAudio, c.ev ? mul : Math.max(mul, cranking ? 0.8 : 0), (cut || cranking) && !coughing, bang, (state.retard || 0) * state.agg / 2, c.ev ? 0 : mis);
+    snd.update(Math.max(0, state.rpm), thrAudio, c.ev ? mul : Math.max(mul, cranking ? 0.8 : 0), (cut || cranking) && !coughing, bang, (state.retard || 0) * state.agg / 2, c.ev ? 0 : mis, state.cam === "race" && !c.ev ? 1 : 0);
   }
   if (state.engine === "starting" && now - state.startAt > 0.9) { setEngine("on"); state.warm = c.ev ? 0 : 0.3; }
 }
@@ -1816,6 +1831,14 @@ function setFly(f) {
   $("flyLight").setAttribute("aria-pressed", String(f === "light"));
 }
 setFly(state.fly);
+function setCam(m) {
+  state.cam = m; store.set("cam", m);
+  $("camStock").setAttribute("aria-pressed", String(m === "stock"));
+  $("camRace").setAttribute("aria-pressed", String(m === "race"));
+}
+setCam(state.cam);
+$("camStock").addEventListener("click", () => setCam("stock"));
+$("camRace").addEventListener("click", () => setCam("race"));
 $("flyStock").addEventListener("click", () => setFly("stock"));
 $("flyLight").addEventListener("click", () => setFly("light"));
 $("uKmh").addEventListener("click", () => setUnits("kmh"));
