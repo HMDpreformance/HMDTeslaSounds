@@ -852,7 +852,7 @@ class EngineDSP {
     this.n1 = 0; this.n2 = 0; this.mech = 0; this.mx = 0;
     this.smoothK = 1 - Math.exp(-2 * Math.PI * cfg.smooth / fs);
     this.noiseK = 1 - Math.exp(-2 * Math.PI * 2200 / fs);
-    this.target = { rpm: 0, load: 0, cut: 0, pop: 0, retard: 0 };
+    this.target = { rpm: 0, load: 0, cut: 0, pop: 0, retard: 0, mis: 0 };
     this.blasts = []; this.queue = [];
   }
   // Afterfire: unburnt fuel lights off in the hot exhaust. The pressure wave is a Friedlander blast
@@ -893,7 +893,10 @@ class EngineDSP {
             const big = t.cut || t.retard > 0.3;
             this.blast(this.L[i] + this.rnd() * 150, (big ? 1.7 : 0.9) * (0.7 + 0.6 * this.rnd()), big ? 0.003 + 0.004 * this.rnd() : 0.0012 + 0.002 * this.rnd(), cfg.banks[i]);
           } else if (t.cut || this.rpm < 60) this.amp[i] = 0.06;
-          else {
+          else if (t.mis > 0 && this.rnd() < t.mis) { // cold misfire: the charge goes out unburnt and sometimes lights off in the pipe
+            this.amp[i] = 0.07;
+            if (this.rnd() < 0.18) this.blast(this.L[i] + this.rnd() * 250, 0.5 + 0.6 * this.rnd(), 0.0015 + 0.002 * this.rnd(), cfg.banks[i]);
+          } else {
             const v = cfg.vary * (1 - 0.6 * load);
             let a = (cfg.base + (1 - cfg.base) * load) * (1 + v * (this.rnd() * 2 - 1));
             if (this.rnd() < v * 0.08) a *= 0.35; // the odd weak burn at idle
@@ -1167,7 +1170,7 @@ class EngineSound {
     this.nodes.push(this.e1, this.e2, this.e3, this.hum);
     this.nodes.forEach((n) => n.start(t));
   }
-  update(rpm, thr, mul, cut, bang, retard = 0) {
+  update(rpm, thr, mul, cut, bang, retard = 0, mis = 0) {
     const car = this.car, t = ctx.currentTime;
     const rn = clamp(rpm / car.redline, 0, 1.05);
     if (car.ev) {
@@ -1184,7 +1187,7 @@ class EngineSound {
     // overrun crackle: aim for roughly a dozen pops a second, not one per firing
     const perSec = Math.max(1, rpm / 120 * cfg.offsets.length);
     const pop = bang > 0 ? bang : (t < this.popUntil && thr < 0.15 ? clamp(14 * (car.pops || 0) / perSec, 0, 0.5) : 0);
-    this.send({ rpm, load: thr, cut: cut ? 1 : 0, pop, retard });
+    this.send({ rpm, load: thr, cut: cut ? 1 : 0, pop, retard, mis });
     // retarded timing on the limiter: flames in the header, so open the filter and push the drive
     this.lp.frequency.setTargetAtTime(cfg.lp[0] + rpm * cfg.lp[1] + thr * cfg.lp[2] + retard * 1500, t, 0.01);
     this.bangGain.gain.setTargetAtTime(mul * 0.9, t, 0.03);
@@ -1244,30 +1247,37 @@ class EngineSound {
       });
       return 0.4;
     }
-    const c = this.car, R = 200, D = 0.75 + Math.random() * 0.5, N = Math.ceil(D * R);
+    const c = this.car, R = 200, D = 1.3 + Math.random() * 1.1, N = Math.ceil(D * R);
     const rpm = new Float32Array(N), f1 = new Float32Array(N), f2 = new Float32Array(N), fw = new Float32Array(N);
     const env = new Float32Array(N), rat = new Float32Array(N);
+    // a cylinder or two fires early ("cough"), kicks the revs up, then it falls back to cranking
+    const coughs = [[D * (0.42 + Math.random() * 0.12), 0.11 + Math.random() * 0.08]];
+    if (Math.random() < 0.65) coughs.push([D * (0.72 + Math.random() * 0.1), 0.09 + Math.random() * 0.07]);
     let th = Math.random() * 360;
     for (let i = 0; i < N; i++) {
-      const tt = i / R, spin = Math.min(1, tt / 0.14);
-      const pulse = Math.pow(Math.max(0, Math.cos(th * Math.PI / 180 * c.cyl / 2)), 6);
-      const r = (40 + 190 * spin) * (1 - 0.3 * pulse * spin) * (1 + (Math.random() - 0.5) * 0.02);
+      const tt = i / R, spin = Math.min(1, tt / 0.3); // a heavy starter takes a moment to get the engine turning
+      const pulse = Math.pow(Math.max(0, Math.cos(th * Math.PI / 180 * c.cyl / 2)), 4);
+      let kick = 0;
+      for (const [cs, cl] of coughs) { const u = (tt - cs) / cl; if (u > 0 && u < 3) kick = Math.max(kick, u < 1 ? Math.sin(u * Math.PI / 2) : Math.exp(-(u - 1) * 1.6)); }
+      const sag = 1 - 0.08 * Math.min(1, tt / D); // battery sags as it cranks
+      const r = (30 + 140 * spin) * sag * (1 - 0.45 * pulse * spin * (1 - kick)) * (1 + 1.9 * kick) * (1 + (Math.random() - 0.5) * 0.03);
       th += r * 6 / R;
-      rpm[i] = r; f1[i] = r * 0.92; f2[i] = r * 1.86; fw[i] = r * 7.4;
-      env[i] = (0.03 + 0.13 * spin) * (0.7 + 0.7 * pulse);
-      rat[i] = (0.01 + 0.05 * pulse) * spin;
+      // starter whine follows the motor: pinion mesh and commutator buzz, about 11:1 on the ring gear
+      rpm[i] = r; f1[i] = r * 1.65 * (1 - 0.5 * kick); f2[i] = r * 4.4 * (1 - 0.5 * kick); fw[i] = r * 12.5 * (1 - 0.5 * kick);
+      env[i] = (0.03 + 0.12 * spin) * (0.6 + 0.9 * pulse) * (1 - 0.6 * kick);
+      rat[i] = (0.012 + 0.05 * pulse) * spin;
     }
-    this.crank = { rpm, rate: R, n: N };
+    this.crank = { rpm, rate: R, n: N, coughs };
     const t0 = ctx.currentTime + 0.03, end = t0 + D, stop = end + 0.45; // small lookahead so the curves start exactly on time
     const o1 = ctx.createOscillator(); o1.type = "sawtooth"; o1.frequency.setValueCurveAtTime(f1, t0, D);
     const o2 = ctx.createOscillator(); o2.type = "square"; o2.frequency.setValueCurveAtTime(f2, t0, D);
     const ow = ctx.createOscillator(); ow.type = "sine"; ow.frequency.setValueCurveAtTime(fw, t0, D);
-    const g1 = ctx.createGain(); g1.gain.value = 0.55; const g2 = ctx.createGain(); g2.gain.value = 0.07;
+    const g1 = ctx.createGain(); g1.gain.value = 0.5; const g2 = ctx.createGain(); g2.gain.value = 0.05;
     const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2400; lp.Q.value = 0.6;
-    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 820; bp.Q.value = 0.7;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 520; bp.Q.value = 0.6;
     const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 110;
     const ge = ctx.createGain(); ge.gain.setValueCurveAtTime(env, t0, D);
-    const gw = ctx.createGain(); gw.gain.value = 0.12;
+    const gw = ctx.createGain(); gw.gain.value = 0.06;
     o1.connect(g1); o2.connect(g2); g1.connect(bp); g2.connect(bp); bp.connect(hp); hp.connect(lp); lp.connect(ge); ge.connect(master);
     ow.connect(gw); gw.connect(ge);
     const nz = noiseSrc(), nbp = ctx.createBiquadFilter(); nbp.type = "bandpass"; nbp.frequency.value = 2600; nbp.Q.value = 1.1;
@@ -1463,7 +1473,7 @@ function step(dt) {
     if (e < 0 && snd && snd.crank) { // follow the starter's crank speed exactly
       const k = snd.crank, i = Math.floor((e + k.n / k.rate) * k.rate);
       target = k.rpm[clamp(i, 0, k.n - 1)];
-    } else target = e < 0 ? 220 : c.idle * (1 + 0.95 * Math.exp(-e * 2.6) * Math.min(1, e * 7)); // catch and flare
+    } else target = e < 0 ? 220 : c.idle * (1 + 0.95 * Math.exp(-e * 2.6) * Math.min(1, e * 7) - 0.18 * Math.exp(-e * 3) * Math.max(0, Math.sin(e * 19))); // catch, stumble and flare
   } else if (c.ev) {
     target = kmh / c.gears[0] * c.redline;
   } else if (state.gear === 0) {
@@ -1530,10 +1540,17 @@ function step(dt) {
     const cranking = state.engine === "starting" && now < state.startAt;
     // the first few firings after the catch are big, rich bangs
     const catchThr = state.engine === "starting" && now >= state.startAt ? 0.5 * Math.exp(-(now - state.startAt) * 4) : 0;
-    const thrAudio = Math.max(cut ? state.thr * 0.3 : state.thr, catchThr);
-    snd.update(Math.max(0, state.rpm), thrAudio, c.ev ? mul : Math.max(mul, cranking ? 0.6 : 0), cut || cranking, bang, (state.retard || 0) * state.agg / 2);
+    let thrAudio = Math.max(cut ? state.thr * 0.3 : state.thr, catchThr), coughing = false, mis = 0;
+    if (cranking && snd.crank && snd.crank.coughs) {
+      const e = now - (state.startAt - snd.crank.n / snd.crank.rate);
+      coughing = snd.crank.coughs.some(([cs, cl]) => e > cs && e < cs + cl);
+      if (coughing) { thrAudio = 0.45; mis = 0.35; }
+    }
+    if (state.engine === "starting" && now >= state.startAt) mis = 0.4 * Math.exp(-(now - state.startAt) * 1.5); // stumbles as it catches
+    if (state.engine === "on" && !c.ev) { const w = clamp((state.warm || 0) / 0.28, 0, 1); mis = Math.max(mis, 0.28 * w * w * w + 0.03 * w); } // cold: the odd miss
+    snd.update(Math.max(0, state.rpm), thrAudio, c.ev ? mul : Math.max(mul, cranking ? 0.8 : 0), (cut || cranking) && !coughing, bang, (state.retard || 0) * state.agg / 2, c.ev ? 0 : mis);
   }
-  if (state.engine === "starting" && now - state.startAt > 0.7) { setEngine("on"); state.warm = c.ev ? 0 : 0.28; }
+  if (state.engine === "starting" && now - state.startAt > 0.9) { setEngine("on"); state.warm = c.ev ? 0 : 0.3; }
 }
 
 /* ---------- Gauge drawing ---------- */
