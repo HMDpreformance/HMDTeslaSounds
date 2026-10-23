@@ -1115,7 +1115,7 @@ const state = {
   lastHighThr: -10, now: 0,
   startAt: 0
 };
-const gps = { id: null, speed: 0, accel: 0, t: 0, last: null, status: "off", acc: null };
+const gps = { id: null, speed: 0, accel: 0, t: 0, last: null, status: "off", acc: null, hist: [] };
 let snd = null;
 const car = () => CARS[state.carIdx];
 
@@ -1151,9 +1151,14 @@ function onPos(p) {
   }
   if (s === null) s = 0;
   if (s < 0.4) s = 0; // GPS jitter while parked
-  if (gps.last && t > gps.last.t) {
-    const a = clamp((s - gps.speed) / (t - gps.last.t), -10, 10);
-    gps.accel = lerp(gps.accel, a, 0.6);
+  // acceleration = slope of speed over the last ~1.5 s, timed on arrival: some browsers (Tesla's included)
+  // send repeated or coarse fix timestamps, which made a fix-to-fix difference read as zero
+  const now = performance.now() / 1000, h = gps.hist;
+  h.push([now, s]); while (h.length > 2 && now - h[0][0] > 1.5) h.shift();
+  if (h.length >= 2 && now - h[0][0] > 0.25) {
+    let mt = 0, ms = 0; for (const [ht, hs] of h) { mt += ht; ms += hs; } mt /= h.length; ms /= h.length;
+    let num = 0, den = 0; for (const [ht, hs] of h) { num += (ht - mt) * (hs - ms); den += (ht - mt) * (ht - mt); }
+    gps.accel = lerp(gps.accel, den > 0 ? clamp(num / den, -10, 10) : 0, 0.7);
   }
   gps.speed = s; gps.t = performance.now() / 1000; gps.last = here; gps.acc = c.accuracy;
   setGps("on", "GPS ±" + Math.round(c.accuracy) + " m");
@@ -1191,7 +1196,7 @@ function step(dt) {
     }
     let t = 0;
     if (state.v > 0.6) {
-      t = gps.accel < -0.5 ? 0.02 : clamp(0.14 + gps.accel * state.sens / 3, 0, 1);
+      t = gps.accel < -0.5 ? 0.02 : clamp(0.14 + gps.accel * state.sens / 2.5, 0, 1);
     }
     state.thrTarget = Math.max(t, state.gas ? 1 : 0);
     state.acc = state.v > 0.6 ? gps.accel : 0;
