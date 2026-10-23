@@ -769,7 +769,7 @@ function carSVG(car, uid) {
 }
 
 /* ---------- Audio engine ---------- */
-let ctx = null, master = null, comp = null, noiseBuf = null, bangBus = null;
+let ctx = null, master = null, comp = null, noiseBuf = null, bangBus = null, turboBus = null;
 let BANG_DRIVE = 1.1;
 function ensureAudio() {
   if (ctx) { if (ctx.state === "suspended") ctx.resume(); return; }
@@ -791,6 +791,7 @@ function buildOutput() {
   master.connect(comp); comp.connect(clipIn);
   bangBus = ctx.createGain(); bangBus.gain.value = state.volume * state.bangVol;
   bangBus.connect(clipIn);
+  turboBus = ctx.createGain(); turboBus.gain.value = state.volume; turboBus.connect(clipIn); // turbo skips the engine compressor so the engine can't bury it
   noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
   const d = noiseBuf.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
@@ -1178,10 +1179,14 @@ class EngineSound {
     if (car.turbo) {
       this.tb = ctx.createOscillator(); this.tb.type = "sine";
       this.tbg = ctx.createGain(); this.tbg.gain.value = 0;
-      this.tb.connect(this.tbg); this.tbg.connect(car.bigTurbo ? master : this.out); this.nodes.push(this.tb);
+      this.tb.connect(this.tbg); this.tbg.connect(car.bigTurbo ? turboBus : this.out); this.nodes.push(this.tb);
+      if (car.bigTurbo) { // half-pitch blade tone sits where small speakers and ears are strongest
+        this.tb2 = ctx.createOscillator(); this.tb2.type = "triangle"; const g2 = ctx.createGain(); g2.gain.value = 0.8;
+        this.tb2.connect(g2); g2.connect(this.tbg); this.nodes.push(this.tb2);
+      }
       if (car.bigTurbo) { // compressor rush
         const hn = noiseSrc(), hb = ctx.createBiquadFilter(); hb.type = "bandpass"; hb.frequency.value = 4200; hb.Q.value = 1.2;
-        this.tbh = ctx.createGain(); this.tbh.gain.value = 0; hn.connect(hb); hb.connect(this.tbh); this.tbh.connect(master); this.nodes.push(hn); this.tbhf = hb;
+        this.tbh = ctx.createGain(); this.tbh.gain.value = 0; hn.connect(hb); hb.connect(this.tbh); this.tbh.connect(turboBus); this.nodes.push(hn); this.tbhf = hb;
       }
     }
     this.nodes.forEach((n) => n.start(t));
@@ -1241,9 +1246,10 @@ class EngineSound {
         if (this.liftArmed && state.thr < 0.3) { this.liftArmed = false; if (this.boost > 0.2) { this.liftFx(this.boost, mul); this.windDown = 1; } }
         this.windDown = Math.max(0, (this.windDown || 0) - 0.008);
         this.tb.frequency.setTargetAtTime(2600 + this.boost * 5400, t, 0.06);
-        this.tbg.gain.setTargetAtTime(this.boost * 0.1 * mul * (1 - this.windDown), t, 0.05); // the lift voice takes over after lift
+        this.tb2.frequency.setTargetAtTime((2600 + this.boost * 5400) * 0.5, t, 0.06);
+        this.tbg.gain.setTargetAtTime(this.boost * 0.32 * mul * (1 - this.windDown), t, 0.05); // the lift voice takes over after lift
         this.tbhf.frequency.setTargetAtTime(2500 + this.boost * 4000, t, 0.1);
-        this.tbh.gain.setTargetAtTime(this.boost * thr * 0.07 * mul, t, 0.05);
+        this.tbh.gain.setTargetAtTime(this.boost * (0.4 + 0.6 * thr) * 0.25 * mul, t, 0.05);
       } else {
         this.boost = lerp(this.boost, target, target > this.boost ? 0.03 : 0.12);
         this.tb.frequency.setTargetAtTime(2400 + this.boost * 3800, t, 0.05);
@@ -1276,13 +1282,13 @@ class EngineSound {
     // matches the video: on lift the unloaded turbo screams up toward ~8 kHz, holds, then winds down to ~3 kHz and fades
     const t = ctx.currentTime + 0.01, f0 = 2600 + boost * 5400, L = 0.6 + 0.6 * boost;
     const out = ctx.createGain(); out.gain.setValueAtTime(0.0001, t);
-    out.gain.exponentialRampToValueAtTime(0.16 * boost * mul, t + 0.06);
-    out.gain.setValueAtTime(0.16 * boost * mul, t + 0.45 * L);
-    out.gain.exponentialRampToValueAtTime(0.06 * boost * mul, t + 0.85 * L);
+    out.gain.exponentialRampToValueAtTime(0.42 * boost * mul, t + 0.06);
+    out.gain.setValueAtTime(0.42 * boost * mul, t + 0.45 * L);
+    out.gain.exponentialRampToValueAtTime(0.18 * boost * mul, t + 0.85 * L);
     out.gain.exponentialRampToValueAtTime(0.0001, t + 1.3 * L);
-    out.connect(master);
+    out.connect(turboBus);
     const peak = Math.min(8400, f0 * 1.1);
-    for (const [r, v] of [[1, 1], [1.012, 0.5], [0.5, 0.18]]) { // blade tone, a beating twin, and a softer sub-tone
+    for (const [r, v] of [[1, 1], [1.012, 0.5], [0.5, 0.75]]) { // blade tone, a beating twin, and a softer sub-tone
       const o = ctx.createOscillator(), g = ctx.createGain(); g.gain.value = v;
       o.frequency.setValueAtTime(f0 * r, t); o.frequency.linearRampToValueAtTime(peak * r, t + 0.15);
       o.frequency.setValueAtTime(peak * r, t + 0.45 * L); o.frequency.exponentialRampToValueAtTime(3000 * r, t + 0.9 * L);
@@ -1293,10 +1299,10 @@ class EngineSound {
     const n = noiseSrc(), bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 2;
     bp.frequency.setValueAtTime(peak * 0.8, t); bp.frequency.exponentialRampToValueAtTime(2500, t + 1.1 * L);
     const ng = ctx.createGain(); ng.gain.setValueAtTime(0.0001, t);
-    ng.gain.exponentialRampToValueAtTime(0.05 * boost * mul, t + 0.04); ng.gain.exponentialRampToValueAtTime(0.0001, t + 1.1 * L);
-    const lfo = ctx.createOscillator(), dep = ctx.createGain(); lfo.frequency.value = 8; dep.gain.value = 0.015 * boost * mul;
+    ng.gain.exponentialRampToValueAtTime(0.16 * boost * mul, t + 0.04); ng.gain.exponentialRampToValueAtTime(0.0001, t + 1.1 * L);
+    const lfo = ctx.createOscillator(), dep = ctx.createGain(); lfo.frequency.value = 8; dep.gain.value = 0.05 * boost * mul;
     lfo.connect(dep); dep.connect(ng.gain);
-    n.connect(bp); bp.connect(ng); ng.connect(master);
+    n.connect(bp); bp.connect(ng); ng.connect(turboBus);
     n.start(t, Math.random(), 1.2 * L); lfo.start(t); lfo.stop(t + 1.2 * L);
   }
   blowOff() {
@@ -1980,12 +1986,14 @@ $("vol").addEventListener("input", (e) => {
   $("volOut").textContent = e.target.value + "%";
   if (master) master.gain.setTargetAtTime(state.volume, ctx.currentTime, 0.05);
   if (bangBus) bangBus.gain.setTargetAtTime(state.volume * state.bangVol, ctx.currentTime, 0.05);
+  if (turboBus) turboBus.gain.setTargetAtTime(state.volume, ctx.currentTime, 0.05);
 });
 $("bangVol").value = Math.round(state.bangVol * 100); $("bangVolOut").textContent = $("bangVol").value + "%";
 $("bangVol").addEventListener("input", (e) => {
   state.bangVol = e.target.value / 100; store.set("bangVol", state.bangVol);
   $("bangVolOut").textContent = e.target.value + "%";
   if (bangBus) bangBus.gain.setTargetAtTime(state.volume * state.bangVol, ctx.currentTime, 0.05);
+  if (turboBus) turboBus.gain.setTargetAtTime(state.volume, ctx.currentTime, 0.05);
 });
 $("sens").value = Math.round(state.sens * 100); $("sensOut").textContent = state.sens.toFixed(1) + "×";
 $("sens").addEventListener("input", (e) => {
