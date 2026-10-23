@@ -401,6 +401,7 @@ const CAR_ART = {
     shoulder: 100, belt: 86
   },
   vtc: {
+    draw: vtcSVG, // hand-drawn to scale, see vtcSVG
     r: 35, wheels: [136, 374], bottom: 134, rim: { style: "spoke", spokes: 6, color: "#3c3f45" }, caliper: "#c4202a", rimRatio: 0.68, flares: "#7b7f86",
     paintDark: 0.2, horizonOp: 0.4, spokeW: 0.3, lower: { y: 112, color: "#7b7f86" }, bumperColor: "#7b7f86", mirrorChrome: true,
     stripe: "M 40 80 L 118 79 L 150 76 L 150 78 L 118 82 L 40 83 Z",
@@ -480,7 +481,138 @@ function wheelSVG(cx, cy, r, spec, u) {
   return s;
 }
 
+// Patrol Y61 Super Safari, drawn to scale (about 0.083 px per mm): 5.05 m long, 2.97 m wheelbase, 32-inch tyres.
+function vtcSVG(u) {
+  const G = 160, R = 33, cy = G - R, W = [132, 378], RA = 40, sill = 130;
+  const f = (n) => n.toFixed(1);
+  const arch = (cx, r, y) => { const dx = Math.sqrt(r * r - (y - cy) * (y - cy)); return [cx - dx, cx + dx]; };
+  const [rl, rr] = arch(W[0], RA, sill), [fl, fr] = arch(W[1], RA, sill);
+  const body = `M 36 ${sill} L 34 108 L 35 30 C 35 20 38 16 46 15 L 296 13 C 304 13 307 15 310 19 L 338 60 C 370 63 410 66 436 68 C 444 69 447 72 447 78 L 448 112 L 446 ${sill} L ${f(fr)} ${sill} A ${RA} ${RA} 0 1 0 ${f(fl)} ${sill} L ${f(rr)} ${sill} A ${RA} ${RA} 0 1 0 ${f(rl)} ${sill} Z`;
+  const glass = "M 46 25 L 297 23 C 301 23 303 24 305 27 L 328 61 L 46 64 Z";
+  const flare = (cx) => {
+    const o = 49, i = RA, [ol, or] = arch(cx, o, 133), [il, ir] = arch(cx, i, sill);
+    return `M ${f(ol)} 133 A ${o} ${o} 0 1 1 ${f(or)} 133 L ${f(ir + 1)} 133 L ${f(ir)} ${sill} A ${i} ${i} 0 1 0 ${f(il)} ${sill} L ${f(il - 1)} 133 Z`;
+  };
+  const wheel = (cx) => {
+    let s = `<ellipse cx="${cx}" cy="${G + 0.5}" rx="${R + 4}" ry="3" fill="#000" opacity=".55"/>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="${R}" fill="url(#tyre${u})"/>`;
+    // all-terrain tread blocks on the visible shoulder
+    s += `<circle cx="${cx}" cy="${cy}" r="${R - 1.3}" fill="none" stroke="#1f2023" stroke-width="2.2" stroke-dasharray="2.6 1.8"/>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="${R - 4.5}" fill="none" stroke="#000" stroke-opacity=".5" stroke-width="1"/>`;
+    s += `<path d="M ${cx - 26} ${cy - 13} A 29 29 0 0 1 ${cx + 22} ${cy - 18}" fill="none" stroke="#fff" stroke-opacity=".09" stroke-width="3"/>`;
+    const rim = 20;
+    s += `<circle cx="${cx}" cy="${cy}" r="${rim + 1}" fill="#0c0d0f"/>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="${rim - 2}" fill="url(#barrel${u})"/>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="12.5" fill="url(#disc${u})"/>`;
+    // brake caliper at the trailing edge, seen between the spokes
+    const ca = -2.35, p = (a, r) => `${f(cx + Math.cos(a) * r)} ${f(cy + Math.sin(a) * r)}`;
+    s += `<path d="M ${p(ca - 0.45, 16.5)} A 16.5 16.5 0 0 1 ${p(ca + 0.45, 16.5)} L ${p(ca + 0.5, 10)} A 10 10 0 0 0 ${p(ca - 0.5, 10)} Z" fill="url(#caliper${u})" stroke="#5a0b10" stroke-width=".5"/>`;
+    // six wide, straight forged spokes
+    let sp = "", hl = "";
+    for (let k = 0; k < 6; k++) {
+      const a = k * Math.PI / 3 - Math.PI / 2 + 0.18;
+      const q = (da, r) => p(a + da, r);
+      sp += `<path d="M ${q(-0.42, 5.8)} L ${q(-0.2, rim - 1.6)} A ${rim - 1.6} ${rim - 1.6} 0 0 1 ${q(0.2, rim - 1.6)} L ${q(0.42, 5.8)} Z"/>`;
+      hl += `<path d="M ${q(-0.36, 6.6)} L ${q(-0.17, rim - 2.2)}"/>`;
+    }
+    s += `<g fill="#4f535a" stroke="#16171a" stroke-width=".55">${sp}</g>`;
+    s += `<g stroke="#9ea3ab" stroke-width=".6" stroke-opacity=".7" fill="none">${hl}</g>`;
+    // machined lip and the rim edge
+    s += `<circle cx="${cx}" cy="${cy}" r="${rim - 0.6}" fill="none" stroke="url(#lip${u})" stroke-width="2.2"/>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="${rim + 0.6}" fill="none" stroke="#45484e" stroke-width="1"/>`;
+    s += `<circle cx="${cx}" cy="${cy}" r="6.2" fill="url(#spoke${u})" stroke="#111" stroke-width=".6"/>`;
+    for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; s += `<circle cx="${f(cx + Math.cos(a) * 4.4)}" cy="${f(cy + Math.sin(a) * 4.4)}" r=".9" fill="#c9ccd1"/>`; }
+    s += `<circle cx="${cx}" cy="${cy}" r="2.4" fill="#1b1c1f" stroke="#7d8189" stroke-width=".5"/>`;
+    return s;
+  };
+  let s = `<defs>
+    <linearGradient id="vp${u}" gradientUnits="userSpaceOnUse" x1="0" y1="13" x2="0" y2="134">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".36" stop-color="#f3f4f6"/><stop offset=".56" stop-color="#e8eaed"/>
+      <stop offset=".64" stop-color="#dde0e4"/><stop offset=".648" stop-color="#bfc3c9"/><stop offset=".78" stop-color="#d3d6da"/><stop offset="1" stop-color="#a9adb3"/>
+    </linearGradient>
+    <linearGradient id="vsheen${u}" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".18" stop-color="#fff" stop-opacity=".5"/><stop offset=".3" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".62" stop-color="#fff" stop-opacity="0"/><stop offset=".74" stop-color="#fff" stop-opacity=".45"/><stop offset=".86" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="vglass${u}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b4450"/><stop offset=".5" stop-color="#151a21"/><stop offset="1" stop-color="#0a0c10"/>
+    </linearGradient>
+    <linearGradient id="vrefl${u}" x1="0" y1="0" x2="1" y2=".35">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".22" stop-color="#fff" stop-opacity=".2"/><stop offset=".3" stop-color="#fff" stop-opacity=".03"/>
+      <stop offset=".55" stop-color="#fff" stop-opacity="0"/><stop offset=".63" stop-color="#fff" stop-opacity=".14"/><stop offset=".7" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="vgrey${u}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9a9ea5"/><stop offset=".25" stop-color="#7f838a"/><stop offset="1" stop-color="#5c6066"/>
+    </linearGradient>
+    <linearGradient id="vflare${u}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a3a7ae"/><stop offset=".5" stop-color="#7d8188"/><stop offset="1" stop-color="#5a5e64"/>
+    </linearGradient>
+    <linearGradient id="chrome${u}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".45" stop-color="#b9bec6"/><stop offset=".55" stop-color="#6c7178"/><stop offset="1" stop-color="#e3e6ea"/>
+    </linearGradient>
+    <linearGradient id="stripe${u}" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#9d0f17"/><stop offset=".6" stop-color="#d81f2a"/><stop offset="1" stop-color="#e8414b"/>
+    </linearGradient>
+    <linearGradient id="vtail${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#6e0a0e"/><stop offset=".5" stop-color="#e01b24"/><stop offset="1" stop-color="#ff5a5f"/></linearGradient>
+    <linearGradient id="vhead${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7f8a96"/><stop offset=".6" stop-color="#e9eef3"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
+    <radialGradient id="tyre${u}" cx=".5" cy=".5" r=".5"><stop offset=".6" stop-color="#232427"/><stop offset=".88" stop-color="#18191b"/><stop offset="1" stop-color="#0b0b0c"/></radialGradient>
+    <radialGradient id="barrel${u}" cx=".5" cy=".5" r=".5"><stop offset=".55" stop-color="#1a1b1e"/><stop offset="1" stop-color="#3a3d42"/></radialGradient>
+    <radialGradient id="disc${u}" cx=".5" cy=".5" r=".5"><stop offset=".35" stop-color="#3b3d41"/><stop offset=".8" stop-color="#8a8d93"/><stop offset="1" stop-color="#55585d"/></radialGradient>
+    <linearGradient id="caliper${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff4a52"/><stop offset="1" stop-color="#a5131b"/></linearGradient>
+    <linearGradient id="spoke${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c8088"/><stop offset=".5" stop-color="#52565d"/><stop offset="1" stop-color="#34363b"/></linearGradient>
+    <linearGradient id="lip${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e4e7eb"/><stop offset=".5" stop-color="#8d9299"/><stop offset="1" stop-color="#c7cbd1"/></linearGradient>
+    <radialGradient id="well${u}" cx=".5" cy=".55" r=".5"><stop offset=".6" stop-color="#0b0b0d"/><stop offset="1" stop-color="#1d1e21"/></radialGradient>
+    <radialGradient id="vshadow${u}" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#000" stop-opacity=".7"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+    <clipPath id="vclip${u}"><path d="${body}"/></clipPath>
+    <clipPath id="vgclip${u}"><path d="${glass}"/></clipPath>
+  </defs>`;
+  s += `<ellipse cx="240" cy="160" rx="214" ry="7" fill="url(#vshadow${u})"/>`;
+  W.forEach((cx) => { s += `<circle cx="${cx}" cy="${cy}" r="${RA - 0.5}" fill="url(#well${u})"/>`; });
+  // springs and axle hints deep in the wheel wells
+  W.forEach((cx) => { s += `<path d="M ${cx - 8} ${cy - 30} L ${cx - 8} ${cy - 18} M ${cx + 8} ${cy - 30} L ${cx + 8} ${cy - 18}" stroke="#2a2b2f" stroke-width="3"/>`; });
+  // rear spoiler and roof rails sit behind the body outline
+  s += `<path d="M 30 12 C 40 9 60 9 74 10 L 74 15 C 60 14 44 15 33 17 Z" fill="url(#vp${u})" stroke="#8d9198" stroke-width=".7"/>`;
+  s += `<path d="M 62 13 L 64 9 L 288 8 L 290 12" fill="none" stroke="#18191c" stroke-width="2.6" stroke-linejoin="round"/>`;
+  s += `<path d="${body}" fill="url(#vp${u})"/>`;
+  s += `<g clip-path="url(#vclip${u})">
+    <rect x="0" y="56" width="480" height="40" fill="url(#vsheen${u})" opacity=".55"/>
+    <rect x="0" y="110" width="480" height="30" fill="url(#vgrey${u})"/>
+    <rect x="0" y="109.4" width="480" height="1" fill="#000" opacity=".35"/><rect x="0" y="110.6" width="480" height="1.6" fill="#fff" opacity=".22"/>
+    <path d="M 36 70.5 L 148 68.5 L 156 64.5 L 159 65 L 152 72.5 L 36 75.5 Z" fill="url(#stripe${u})"/>
+    <path d="M 36 77 L 140 75.6 L 140 76.6 L 36 78 Z" fill="#5f636a" opacity=".8"/>
+    <path d="M 40 86.5 L 446 85" stroke="#fff" stroke-opacity=".6" stroke-width="1"/><path d="M 40 88 L 446 86.5" stroke="#000" stroke-opacity=".07" stroke-width="1"/>
+    <path d="M 156 26 L 156 129 M 236 24 L 236 129 M 334 62 L 334 129" stroke="#40444a" stroke-width=".9" fill="none"/>
+    <path d="M 157 26 L 157 129 M 237 24 L 237 129 M 335 62 L 335 129" stroke="#fff" stroke-opacity=".5" stroke-width=".6" fill="none"/>
+    <path d="M 46 21.5 L 298 19.5" stroke="#7f838a" stroke-width=".8"/>
+    <rect x="72" y="80" width="15" height="11" rx="2" fill="none" stroke="#8e9298" stroke-width=".7"/>
+    <rect x="0" y="125" width="480" height="8" fill="#000" opacity=".22"/>
+  </g>`;
+  s += `<path d="${glass}" fill="url(#vglass${u})" stroke="#0b0c0e" stroke-width="2" stroke-linejoin="round"/>`;
+  s += `<g clip-path="url(#vgclip${u})"><rect x="0" y="0" width="480" height="70" fill="url(#vrefl${u})"/>
+    <path d="M 60 64 C 120 52 200 46 330 44 L 330 64 Z" fill="#000" opacity=".25"/></g>`;
+  // pillars: blacked out, like the factory trim
+  s += `<path d="M 147 24.5 L 156 24.4 L 156 64 L 147 64 Z" fill="#0e0f11"/>`;
+  s += `<path d="M 231 23.8 L 240 23.7 L 240 64 L 231 64 Z" fill="#0e0f11"/>`;
+  s += `<path d="M 46 64.2 L 330 61.4" stroke="#1a1b1e" stroke-width="2.2"/>`;
+  // flares, bumpers, step
+  s += `<path d="${flare(W[0])}" fill="url(#vflare${u})" stroke="#4b4f55" stroke-width=".6"/><path d="${flare(W[1])}" fill="url(#vflare${u})" stroke="#4b4f55" stroke-width=".6"/>`;
+  s += `<path d="M 176 129 L 336 129 L 334 135.5 L 178 135.5 Z" fill="#26272b"/><path d="M 176 129 L 336 129" stroke="#8a8e95" stroke-width="1"/>`;
+  s += `<path d="M 45 106 L 30 106 C 26 106 25 109 25 112 L 25 132 C 25 135 27 137 31 137 L 46 137 Z" fill="url(#vgrey${u})" stroke="#3f4248" stroke-width=".8"/>`;
+  s += `<path d="M 432 102 L 449 102 C 452 102 453 105 453 108 L 453 132 C 453 135 451 137 447 137 L 432 137 Z" fill="url(#vgrey${u})" stroke="#3f4248" stroke-width=".8"/>`;
+  s += `<rect x="444" y="120" width="7" height="6" rx="2" fill="#d9dde2" stroke="#55585e" stroke-width=".5"/>`;
+  // lamps
+  s += `<path d="M 34.5 28 L 40 28 L 40 92 L 34.5 92 Z" fill="url(#vtail${u})" stroke="#3a0507" stroke-width=".6"/><path d="M 34.5 70 L 40 70 L 40 78 L 34.5 78 Z" fill="#f1f1f1" opacity=".85"/>`;
+  s += `<path d="M 436 70 C 442 70.5 446 72 447 76 L 447 86 L 436 86 Z" fill="url(#vhead${u})" stroke="#4a4e55" stroke-width=".7"/>`;
+  s += `<rect x="424" y="90" width="9" height="3" rx="1.5" fill="#ffa020" stroke="#7a4300" stroke-width=".4"/>`;
+  // chrome mirror and handles
+  s += `<path d="M 327 61 L 331 52 C 333 49 340 48 346 49 C 349 50 350 53 349 57 L 347 61 C 341 62.5 333 62.5 327 61 Z" fill="url(#chrome${u})" stroke="#4e5259" stroke-width=".6"/>`;
+  s += `<rect x="241" y="72" width="14" height="3.4" rx="1.7" fill="url(#chrome${u})" stroke="#555" stroke-width=".4"/><rect x="160" y="72.5" width="14" height="3.4" rx="1.7" fill="url(#chrome${u})" stroke="#555" stroke-width=".4"/>`;
+  s += wheel(W[0]) + wheel(W[1]);
+  return `<svg viewBox="0 0 480 172" aria-hidden="true">${s}</svg>`;
+}
+
 function carSVG(car, uid) {
+  if (CAR_ART[car.id].draw) return CAR_ART[car.id].draw(uid);
   const a = CAR_ART[car.id], u = uid, r = a.r, cy = 160 - r, by = a.bottom;
   const ra = r + 5, dx = Math.sqrt(ra * ra - (by - cy) * (by - cy));
   const [xr, xf] = a.wheels;
