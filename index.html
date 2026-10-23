@@ -1249,7 +1249,7 @@ class EngineSound {
         this.tb2.frequency.setTargetAtTime((2600 + this.boost * 5400) * 0.5, t, 0.06);
         this.tbg.gain.setTargetAtTime(this.boost * 0.32 * mul * (1 - this.windDown), t, 0.05); // the lift voice takes over after lift
         this.tbhf.frequency.setTargetAtTime(2500 + this.boost * 4000, t, 0.1);
-        this.tbh.gain.setTargetAtTime(this.boost * (0.4 + 0.6 * thr) * 0.25 * mul, t, 0.05);
+        this.tbh.gain.setTargetAtTime(this.boost * (0.4 + 0.6 * thr) * 0.25 * mul * (1 - 0.85 * this.windDown), t, 0.05);
       } else {
         this.boost = lerp(this.boost, target, target > this.boost ? 0.03 : 0.12);
         this.tb.frequency.setTargetAtTime(2400 + this.boost * 3800, t, 0.05);
@@ -1282,9 +1282,9 @@ class EngineSound {
     // matches the video: on lift the unloaded turbo screams up toward ~8 kHz, holds, then winds down to ~3 kHz and fades
     const t = ctx.currentTime + 0.01, f0 = 2600 + boost * 5400, L = 0.6 + 0.6 * boost;
     const out = ctx.createGain(); out.gain.setValueAtTime(0.0001, t);
-    out.gain.exponentialRampToValueAtTime(0.42 * boost * mul, t + 0.06);
-    out.gain.setValueAtTime(0.42 * boost * mul, t + 0.45 * L);
-    out.gain.exponentialRampToValueAtTime(0.18 * boost * mul, t + 0.85 * L);
+    out.gain.exponentialRampToValueAtTime(0.12 * boost * mul, t + 0.06);
+    out.gain.setValueAtTime(0.12 * boost * mul, t + 0.45 * L);
+    out.gain.exponentialRampToValueAtTime(0.05 * boost * mul, t + 0.85 * L);
     out.gain.exponentialRampToValueAtTime(0.0001, t + 1.3 * L);
     out.connect(turboBus);
     const peak = Math.min(8400, f0 * 1.1);
@@ -1299,11 +1299,27 @@ class EngineSound {
     const n = noiseSrc(), bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 2;
     bp.frequency.setValueAtTime(peak * 0.8, t); bp.frequency.exponentialRampToValueAtTime(2500, t + 1.1 * L);
     const ng = ctx.createGain(); ng.gain.setValueAtTime(0.0001, t);
-    ng.gain.exponentialRampToValueAtTime(0.16 * boost * mul, t + 0.04); ng.gain.exponentialRampToValueAtTime(0.0001, t + 1.1 * L);
-    const lfo = ctx.createOscillator(), dep = ctx.createGain(); lfo.frequency.value = 8; dep.gain.value = 0.05 * boost * mul;
+    ng.gain.exponentialRampToValueAtTime(0.05 * boost * mul, t + 0.04); ng.gain.exponentialRampToValueAtTime(0.0001, t + 1.1 * L);
+    const lfo = ctx.createOscillator(), dep = ctx.createGain(); lfo.frequency.value = 8; dep.gain.value = 0;
     lfo.connect(dep); dep.connect(ng.gain);
     n.connect(bp); bp.connect(ng); ng.connect(turboBus);
     n.start(t, Math.random(), 1.2 * L); lfo.start(t); lfo.stop(t + 1.2 * L);
+    // compressor surge "stu-tu-tu-tu": discrete air chops, slowing and fading as boost bleeds off
+    const fn = noiseSrc(), fb = ctx.createBiquadFilter(); fb.type = "bandpass"; fb.frequency.value = 1500; fb.Q.value = 1.1;
+    const fh = ctx.createBiquadFilter(); fh.type = "peaking"; fh.frequency.value = 3200; fh.Q.value = 1.5; fh.gain.value = 6;
+    const fg = ctx.createGain(); fg.gain.setValueAtTime(0, t);
+    fn.connect(fb); fb.connect(fh); fh.connect(fg); fg.connect(turboBus);
+    const N = Math.round(8 + 8 * boost); let tp = t + 0.03, gap = 0.042, a = 1.6 * boost * mul;
+    for (let k = 0; k < N; k++) {
+      fg.gain.setValueAtTime(0.0001, tp); fg.gain.exponentialRampToValueAtTime(a, tp + 0.004);
+      fg.gain.exponentialRampToValueAtTime(a * 0.02, tp + gap * 0.4); fg.gain.setValueAtTime(0, tp + gap * 0.45);
+      const ch = ctx.createOscillator(), cg = ctx.createGain(); ch.type = "triangle"; // the little chirp in each chop
+      ch.frequency.setValueAtTime(1900, tp); ch.frequency.exponentialRampToValueAtTime(1100, tp + 0.03);
+      cg.gain.setValueAtTime(0.0001, tp); cg.gain.exponentialRampToValueAtTime(a * 0.25, tp + 0.003); cg.gain.exponentialRampToValueAtTime(0.0001, tp + 0.03);
+      ch.connect(cg); cg.connect(turboBus); ch.start(tp); ch.stop(tp + 0.04);
+      tp += gap; gap *= 1.06; a *= 0.88;
+    }
+    fn.start(t, Math.random(), tp - t + 0.1);
   }
   blowOff() {
     if (!this.car.turbo || this.boost < 0.35) return;
