@@ -31,6 +31,7 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -297,6 +298,12 @@ body.fs .cluster { border: 0; background: transparent; }
           <button id="flyLight" aria-pressed="false">Light race</button>
         </div>
         <span></span>
+        <span class="turbo-row">Turbo</span>
+        <div class="seg turbo-row" role="group" aria-label="VTC turbo" style="justify-self:start">
+          <button id="turboOff" aria-pressed="true">NA</button>
+          <button id="turboOn" aria-pressed="false">Turbo</button>
+        </div>
+        <span class="turbo-row"></span>
         <span>Cam</span>
         <div class="seg" role="group" aria-label="Camshaft" style="justify-self:start">
           <button id="camStock" aria-pressed="true">Stock</button>
@@ -500,6 +507,7 @@ const CAR_ART = {
   }
 };
 
+CAR_ART.vtcT = CAR_ART.vtc;
 function mixHex(a, b, t) {
   const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
   const ch = (s) => Math.round(((pa >> s) & 255) * (1 - t) + ((pb >> s) & 255) * t);
@@ -825,6 +833,7 @@ const DSP_CFG = {
              pipe: 1.4, refl: 0.55, pipeDamp: 0.45, dur: 135, base: 0.34, vary: 0.15, noise: 0.5, smooth: 1700,
              intake: 0.6, intakeLP: 0.3, cross: 0, low: 5, peakF: 260, peakG: 6, lp: [800, 0.3, 1900], drive: 2.6, level: 0.22 }
 };
+DSP_CFG.vtcT = Object.assign({}, DSP_CFG.vtc, { noise: 1.15, smooth: 5600, lp: [1500, 0.5, 3800], drive: 3.6, peakF: 620, peakG: 4, low: 3 });
 function dspSetup(id) {
   const d = DSP_CFG[id], n = d.order.length;
   const offsets = new Array(n);
@@ -1161,19 +1170,6 @@ class EngineSound {
     bDrive.connect(bSat); bSat.connect(bLp);
     bLp.connect(this.bangGain); bLp.connect(bSpace); bSpace.connect(bsg); bsg.connect(this.bangGain); this.bangGain.connect(bangBus || master);
 
-    // light race flywheel + race clutch: gear and clutch lash chatter at idle, a metallic rattle on every firing
-    this.rclk = ctx.createOscillator(); this.rclk.type = "sawtooth"; this.rclk.frequency.value = 30;
-    const gate = ctx.createWaveShaper(), gc = new Float32Array(256);
-    for (let i = 0; i < 256; i++) { const x = i / 255 * 2 - 1; gc[i] = x > 0.72 ? (x - 0.72) / 0.28 : 0; }
-    gate.curve = gc;
-    const rn = noiseSrc(), rgate = ctx.createGain(); rgate.gain.value = 0;
-    this.rclk.connect(gate); gate.connect(rgate.gain); rn.connect(rgate);
-    this.rattle = ctx.createGain(); this.rattle.gain.value = 0;
-    [[2300, 6, 1], [3700, 7, 0.8], [5600, 9, 0.6], [1250, 5, 0.5]].forEach(([f, q, a]) => {
-      const b = ctx.createBiquadFilter(); b.type = "bandpass"; b.frequency.value = f; b.Q.value = q;
-      const g = ctx.createGain(); g.gain.value = a; rgate.connect(b); b.connect(g); g.connect(this.rattle);
-    });
-    this.rattle.connect(master); this.nodes.push(this.rclk, rn);
     if (car.sc) {
       this.sc = ctx.createOscillator(); this.sc.type = "triangle";
       this.scg = ctx.createGain(); this.scg.gain.value = 0;
@@ -1182,7 +1178,11 @@ class EngineSound {
     if (car.turbo) {
       this.tb = ctx.createOscillator(); this.tb.type = "sine";
       this.tbg = ctx.createGain(); this.tbg.gain.value = 0;
-      this.tb.connect(this.tbg); this.tbg.connect(this.out); this.nodes.push(this.tb);
+      this.tb.connect(this.tbg); this.tbg.connect(car.bigTurbo ? master : this.out); this.nodes.push(this.tb);
+      if (car.bigTurbo) { // compressor rush
+        const hn = noiseSrc(), hb = ctx.createBiquadFilter(); hb.type = "bandpass"; hb.frequency.value = 4200; hb.Q.value = 1.2;
+        this.tbh = ctx.createGain(); this.tbh.gain.value = 0; hn.connect(hb); hb.connect(this.tbh); this.tbh.connect(master); this.nodes.push(hn); this.tbhf = hb;
+      }
     }
     this.nodes.forEach((n) => n.start(t));
   }
@@ -1227,22 +1227,24 @@ class EngineSound {
     this.bangGain.gain.setTargetAtTime(mul * 0.9, t, 0.03);
     this.drive.gain.setTargetAtTime(0.6 + thr * cfg.drive * 0.22 + retard * 0.5, t, 0.01);
     this.out.gain.setTargetAtTime((0.7 + 0.3 * thr + 0.1 * rn) * mul * (cfg.level || 1), t, 0.03);
-    if (this.rattle) {
-      const fire = Math.max(4, rpm / 60 * (car.cyl || 4) / 2), light = state.fly === "light";
-      this.rclk.frequency.setTargetAtTime(fire * (0.97 + Math.random() * 0.06), t, 0.01);
-      const idleish = clamp(1 - (rpm - car.idle) / 1600, 0, 1), crank = cut && rpm < 600 ? 1 : 0;
-      const lvl = light ? (crank ? 0.5 : 0.32 * idleish * (1 - 0.85 * thr)) * (0.75 + 0.5 * Math.random()) : 0;
-      this.rattle.gain.setTargetAtTime(lvl * mul, t, 0.03);
-    }
     if (this.sc) {
       this.sc.frequency.setTargetAtTime(rpm * car.sc, t, 0.02);
       this.scg.gain.setTargetAtTime(0.035 * rn * (0.25 + thr), t, 0.05);
     }
     if (this.tb) {
       const target = thr > 0.3 ? clamp((rn - 0.25) * 1.6, 0, 1) * thr : 0;
-      this.boost = lerp(this.boost, target, target > this.boost ? 0.03 : 0.12);
-      this.tb.frequency.setTargetAtTime(2400 + this.boost * 3800, t, 0.05);
-      this.tbg.gain.setTargetAtTime(this.boost * 0.03, t, 0.05);
+      if (car.bigTurbo) { // boost holds through the limiter's cuts, and the turbo whistles down slowly after lift
+        const tgt = cut && rpm > car.redline * 0.8 ? Math.max(target, this.boost) : target;
+        this.boost = lerp(this.boost, tgt, tgt > this.boost ? 0.025 : 0.012);
+        this.tb.frequency.setTargetAtTime(2600 + this.boost * 5400, t, 0.06);
+        this.tbg.gain.setTargetAtTime(this.boost * 0.05 * mul, t, 0.05);
+        this.tbhf.frequency.setTargetAtTime(2500 + this.boost * 4000, t, 0.1);
+        this.tbh.gain.setTargetAtTime(this.boost * thr * 0.07 * mul, t, 0.05);
+      } else {
+        this.boost = lerp(this.boost, target, target > this.boost ? 0.03 : 0.12);
+        this.tb.frequency.setTargetAtTime(2400 + this.boost * 3800, t, 0.05);
+        this.tbg.gain.setTargetAtTime(this.boost * 0.03, t, 0.05);
+      }
     }
   }
   // big flame bang (limiter and flat-shift): a deep blast fired into the exhaust so it booms through the pipe
@@ -1333,7 +1335,27 @@ class EngineSound {
     gr.gain.setValueAtTime(0, e1);
     [o1, o2, ow].forEach((o) => { o.start(t0); o.stop(stop); }); nz.start(t0); nz.stop(stop);
     this.clunk(t0, 0.32); this.clunk(e1 + 0.03, 0.16);
+    if (lightFw) this.swordRing(e1 + 0.02);
     return D;
+  }
+  // light race flywheel: as the engine catches the bare steel flywheel and pinion let go with a ringing
+  // "shiiing", like a sword being drawn: a rising swish, then high, slightly detuned partials ringing out
+  swordRing(t) {
+    const out = ctx.createGain(); out.gain.value = 0.55; out.connect(master);
+    const sw = noiseSrc(), bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 3;
+    bp.frequency.setValueAtTime(1800, t); bp.frequency.exponentialRampToValueAtTime(7500, t + 0.28);
+    const sg = ctx.createGain(); sg.gain.setValueAtTime(0.0001, t); sg.gain.exponentialRampToValueAtTime(0.35, t + 0.2); sg.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    sw.connect(bp); bp.connect(sg); sg.connect(out); sw.start(t, Math.random(), 0.5);
+    const base = 2650 + Math.random() * 300;
+    [[1, 0.22, 1.3], [1.47, 0.16, 1.1], [2.09, 0.12, 0.9], [2.76, 0.08, 0.7], [3.51, 0.05, 0.5]].forEach(([m, a, d], k) => {
+      [1, 1.0035].forEach((det) => { // two close partials beat like a ringing blade
+        const o = ctx.createOscillator(), g = ctx.createGain(); o.type = "sine";
+        const f = base * m * det, t1 = t + 0.12 + k * 0.01;
+        o.frequency.setValueAtTime(f * 0.96, t1); o.frequency.exponentialRampToValueAtTime(f, t1 + 0.15);
+        g.gain.setValueAtTime(0.0001, t1); g.gain.exponentialRampToValueAtTime(a / 2, t1 + 0.012); g.gain.exponentialRampToValueAtTime(0.0005, t1 + d);
+        o.connect(g); g.connect(out); o.start(t1); o.stop(t1 + d + 0.05);
+      });
+    });
   }
   // starter solenoid / pinion: a short metallic knock
   clunk(t, a) {
@@ -1349,7 +1371,6 @@ class EngineSound {
   shutdown() {
     const t = ctx.currentTime;
     if (this.bangGain) { this.bangGain.gain.cancelScheduledValues(t); this.bangGain.gain.setTargetAtTime(0, t, 0.3); }
-    if (this.rattle) { this.rattle.gain.cancelScheduledValues(t); this.rattle.gain.setTargetAtTime(0, t, 0.1); setTimeout(() => { try { this.rattle.disconnect(); } catch (e) {} }, 1800); }
     this.out.gain.cancelScheduledValues(t);
     this.out.gain.setTargetAtTime(0, t, 0.25);
     this.nodes.forEach((n) => { try { n.stop(t + 1.6); } catch (e) {} });
@@ -1363,6 +1384,7 @@ const state = {
   units: store.get("units", "kmh"),
   fly: store.get("fly", "stock"),
   cam: store.get("cam", "stock"),
+  turbo: store.get("turbo", false),
   volume: store.get("vol", 0.8),
   sens: store.get("sens", 1),
   agg: store.get("agg", 2.5),
@@ -1380,7 +1402,12 @@ const state = {
 };
 const gps = { id: null, speed: 0, accel: 0, t: 0, last: null, status: "off", acc: null, hist: [] };
 let snd = null;
-const car = () => CARS[state.carIdx];
+// VTC turbo build: single turbo with a dump pipe out of the bonnet, raspy and hissy, with a fast stutter limiter
+const VTC_TURBO = Object.assign({}, CARS.find((c) => c.id === "vtc"), {
+  id: "vtcT", name: "Nissan Patrol VTC Turbo", spec: "TB48 stroker · single turbo, bonnet dump pipe · 6,300 rpm cut · 5-speed manual",
+  redline: 6300, accel: 6.2, revUp: 12000, revDown: 7000, pops: 1, turbo: true, bigTurbo: true, limStyle: "stutter"
+});
+const car = () => { const c = CARS[state.carIdx]; return state.turbo && c.id === "vtc" ? VTC_TURBO : c; };
 
 /* ---------- GPS ---------- */
 function haversine(a, b) {
@@ -1556,16 +1583,21 @@ function step(dt) {
   if (!c.ev && state.engine === "on" && state.thr > 0.5) {
     if (!state.limCut && state.limiter <= 0 && state.rpm >= c.redline - 25) {
       const ag = state.agg;
+      if (c.limStyle === "stutter") { // fast "brrrap": ~30 cuts a second, small drops, the dump pipe crackling on every one
+        state.limCut = true; state.limiter = 0.012 + Math.random() * 0.01;
+        if (snd && snd.bangFx && Math.random() < 0.2 + 0.1 * ag) snd.bangFx(Math.random() * 0.01, 0.35 + 0.18 * ag * Math.random());
+      } else {
       state.limCut = true; state.limiter = 0.05 * ag + Math.random() * 0.04 * ag;
       if (snd && snd.bangFx) { // extra flame bangs from the tailpipe
         const n = Math.max(1, Math.round(0.3 * ag + Math.random() * 0.6 * ag));
         for (let i = 0; i < n; i++) snd.bangFx(Math.random() * state.limiter, 0.5 + 0.25 * ag * Math.random());
       }
+      }
     } else if (state.limCut && state.limiter <= 0) {
-      state.limCut = false; state.limiter = 0.02;
+      state.limCut = false; state.limiter = c.limStyle === "stutter" ? 0.012 + Math.random() * 0.012 : 0.02;
     }
   } else state.limCut = false;
-  if (state.limCut) { state.rpm -= c.revDown * (FLYWHEEL[state.fly] || FLYWHEEL.stock).down * (0.6 + 0.4 * state.agg) * dt; state.retard = 1; }
+  if (state.limCut) { state.rpm -= c.revDown * (FLYWHEEL[state.fly] || FLYWHEEL.stock).down * (c.limStyle === "stutter" ? 0.8 : 0.6 + 0.4 * state.agg) * dt; state.retard = 1; }
   else state.retard = Math.max(0, (state.retard || 0) - dt * 2);
 
   // 6. overrun pops when lifting at high rpm
@@ -1778,6 +1810,7 @@ function renderCar() {
   $("carName").textContent = c.name;
   $("carSpec").textContent = c.spec;
   [...$("picker").children].forEach((b, i) => b.setAttribute("aria-pressed", String(i === state.carIdx)));
+  document.querySelectorAll(".turbo-row").forEach((el) => { el.hidden = CARS[state.carIdx].id !== "vtc"; }); // turbo build is VTC only
 }
 function buildPicker() {
   $("picker").innerHTML = CARS.map((c, i) => `<button data-i="${i}" aria-pressed="false">${carSVG(c, "p" + i)}<span>${c.short}</span><small>${c.ev ? "Electric" : c.cyl + " cyl"}</small></button>`).join("");
@@ -1785,6 +1818,18 @@ function buildPicker() {
     const b = e.target.closest("button"); if (!b) return;
     selectCar(+b.dataset.i);
   });
+}
+function setTurbo(on) {
+  const was = car().id;
+  state.turbo = on; store.set("turbo", on);
+  $("turboOff").setAttribute("aria-pressed", String(!on));
+  $("turboOn").setAttribute("aria-pressed", String(on));
+  if (car().id !== was) { renderCar(); restartSound(); }
+}
+function restartSound() {
+  if (state.engine === "off" || !snd) return;
+  snd.shutdown(); snd = new EngineSound(car());
+  state.rpm = 0; state.startAt = state.now + snd.starter(); setEngine("starting");
 }
 function selectCar(i) {
   if (i === state.carIdx) return;
@@ -1876,6 +1921,9 @@ function setCam(m) {
 }
 setCam(state.cam);
 $("camStock").addEventListener("click", () => setCam("stock"));
+$("turboOff").setAttribute("aria-pressed", String(!state.turbo)); $("turboOn").setAttribute("aria-pressed", String(state.turbo));
+$("turboOff").addEventListener("click", () => setTurbo(false));
+$("turboOn").addEventListener("click", () => setTurbo(true));
 $("camRace").addEventListener("click", () => setCam("race"));
 $("camBig").addEventListener("click", () => setCam("big"));
 $("flyStock").addEventListener("click", () => setFly("stock"));
