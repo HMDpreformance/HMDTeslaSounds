@@ -1243,7 +1243,7 @@ class EngineSound {
         this.boost = lerp(this.boost, tgt, tgt > this.boost ? 0.05 : 0.012);
         // lifting off on boost: the compressor flutters against the shut throttle, and the whistle winds down loud
         if (state.thr > 0.5) this.liftArmed = true; // fire once per lift, after a real stab of throttle
-        if (this.liftArmed && state.thr < 0.3) { this.liftArmed = false; if (this.boost > 0.2) { this.liftFx(this.boost, mul); this.windDown = 1; } }
+        if (this.liftArmed && state.thr < 0.3) { this.liftArmed = false; if (this.boost > 0.12) { this.liftFx(this.boost, mul); this.windDown = 1; } }
         this.windDown = Math.max(0, (this.windDown || 0) - 0.008);
         this.tb.frequency.setTargetAtTime(2600 + this.boost * 5400, t, 0.06);
         this.tb2.frequency.setTargetAtTime((2600 + this.boost * 5400) * 0.5, t, 0.06);
@@ -1279,47 +1279,34 @@ class EngineSound {
   }
   // compressor surge flutter ("stu-tu-tu-tu"): air bouncing off the closed throttle, slowing as boost bleeds off
   liftFx(boost, mul) {
-    // matches the video: on lift the unloaded turbo screams up toward ~8 kHz, holds, then winds down to ~3 kHz and fades
-    const t = ctx.currentTime + 0.01, f0 = 2600 + boost * 5400, L = 0.6 + 0.6 * boost;
-    const out = ctx.createGain(); out.gain.setValueAtTime(0.0001, t);
-    out.gain.exponentialRampToValueAtTime(0.12 * boost * mul, t + 0.06);
-    out.gain.setValueAtTime(0.12 * boost * mul, t + 0.45 * L);
-    out.gain.exponentialRampToValueAtTime(0.05 * boost * mul, t + 0.85 * L);
-    out.gain.exponentialRampToValueAtTime(0.0001, t + 1.3 * L);
-    out.connect(turboBus);
-    const peak = Math.min(8400, f0 * 1.1);
-    for (const [r, v] of [[1, 1], [1.012, 0.5], [0.5, 0.75]]) { // blade tone, a beating twin, and a softer sub-tone
-      const o = ctx.createOscillator(), g = ctx.createGain(); g.gain.value = v;
-      o.frequency.setValueAtTime(f0 * r, t); o.frequency.linearRampToValueAtTime(peak * r, t + 0.15);
-      o.frequency.setValueAtTime(peak * r, t + 0.45 * L); o.frequency.exponentialRampToValueAtTime(3000 * r, t + 0.9 * L);
-      o.frequency.exponentialRampToValueAtTime(2300 * r, t + 1.3 * L);
-      o.connect(g); g.connect(out); o.start(t); o.stop(t + 1.35 * L);
-    }
-    // airy rush of the compressor spinning down, plus a light surge flutter
-    const n = noiseSrc(), bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 2;
-    bp.frequency.setValueAtTime(peak * 0.8, t); bp.frequency.exponentialRampToValueAtTime(2500, t + 1.1 * L);
-    const ng = ctx.createGain(); ng.gain.setValueAtTime(0.0001, t);
-    ng.gain.exponentialRampToValueAtTime(0.05 * boost * mul, t + 0.04); ng.gain.exponentialRampToValueAtTime(0.0001, t + 1.1 * L);
-    const lfo = ctx.createOscillator(), dep = ctx.createGain(); lfo.frequency.value = 8; dep.gain.value = 0;
-    lfo.connect(dep); dep.connect(ng.gain);
-    n.connect(bp); bp.connect(ng); ng.connect(turboBus);
-    n.start(t, Math.random(), 1.2 * L); lfo.start(t); lfo.stop(t + 1.2 * L);
-    // compressor surge "stu-tu-tu-tu": discrete air chops, slowing and fading as boost bleeds off
-    const fn = noiseSrc(), fb = ctx.createBiquadFilter(); fb.type = "bandpass"; fb.frequency.value = 1500; fb.Q.value = 1.1;
-    const fh = ctx.createBiquadFilter(); fh.type = "peaking"; fh.frequency.value = 3200; fh.Q.value = 1.5; fh.gain.value = 6;
-    const fg = ctx.createGain(); fg.gain.setValueAtTime(0, t);
-    fn.connect(fb); fb.connect(fh); fh.connect(fg); fg.connect(turboBus);
-    const N = Math.round(8 + 8 * boost); let tp = t + 0.03, gap = 0.042, a = 1.6 * boost * mul;
+    // copied from Hamad's TB48 video: on lift the whole turbo sound (whistle + hiss) chops at ~15 Hz
+    // ("stu-tu-tu-tu") for ~0.9 s, each chop as loud as the boost under throttle, slowing and fading out
+    const t = ctx.currentTime + 0.01, f0 = 2600 + boost * 5400;
+    const gate = ctx.createGain(); gate.gain.setValueAtTime(0, t); gate.connect(turboBus);
+    const n = noiseSrc(), hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 1400; hp.Q.value = 0.7;
+    const pk = ctx.createBiquadFilter(); pk.type = "peaking"; pk.frequency.value = 4200; pk.Q.value = 0.9; pk.gain.value = 7;
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 9000;
+    const ng = ctx.createGain(); ng.gain.value = 0.7;
+    n.connect(hp); hp.connect(pk); pk.connect(lp); lp.connect(ng); ng.connect(gate);
+    const mb = ctx.createBiquadFilter(); mb.type = "bandpass"; mb.frequency.value = 900; mb.Q.value = 0.8; // a little body in each chop
+    const mg = ctx.createGain(); mg.gain.value = 0.35; n.connect(mb); mb.connect(mg); mg.connect(gate);
+    const o = ctx.createOscillator(), og = ctx.createGain(); og.gain.value = 0.22;
+    const o2 = ctx.createOscillator(), og2 = ctx.createGain(); o2.type = "triangle"; og2.gain.value = 0.15;
+    const N = Math.round(9 + 6 * boost);
+    let tp = t, per = 0.062, a = Math.min(1, 0.45 + 0.7 * boost) * mul;
+    const end = (() => { let e = t, p = per; for (let k = 0; k < N; k++) { e += p; p *= 1.012; } return e; })();
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(2400, f0 * 0.55), end);
+    o2.frequency.setValueAtTime(f0 * 0.5, t); o2.frequency.exponentialRampToValueAtTime(Math.max(1200, f0 * 0.27), end);
+    o.connect(og); og.connect(gate); o2.connect(og2); og2.connect(gate);
     for (let k = 0; k < N; k++) {
-      fg.gain.setValueAtTime(0.0001, tp); fg.gain.exponentialRampToValueAtTime(a, tp + 0.004);
-      fg.gain.exponentialRampToValueAtTime(a * 0.02, tp + gap * 0.4); fg.gain.setValueAtTime(0, tp + gap * 0.45);
-      const ch = ctx.createOscillator(), cg = ctx.createGain(); ch.type = "triangle"; // the little chirp in each chop
-      ch.frequency.setValueAtTime(1900, tp); ch.frequency.exponentialRampToValueAtTime(1100, tp + 0.03);
-      cg.gain.setValueAtTime(0.0001, tp); cg.gain.exponentialRampToValueAtTime(a * 0.25, tp + 0.003); cg.gain.exponentialRampToValueAtTime(0.0001, tp + 0.03);
-      ch.connect(cg); cg.connect(turboBus); ch.start(tp); ch.stop(tp + 0.04);
-      tp += gap; gap *= 1.06; a *= 0.88;
+      gate.gain.setValueAtTime(0.0001, tp);
+      gate.gain.exponentialRampToValueAtTime(a, tp + 0.006);          // hard "t" attack
+      gate.gain.exponentialRampToValueAtTime(a * 0.45, tp + per * 0.42); // the "u"
+      gate.gain.exponentialRampToValueAtTime(0.004, tp + per * 0.62);   // gap between chops
+      tp += per; per *= 1.012; a *= 0.9;
     }
-    fn.start(t, Math.random(), tp - t + 0.1);
+    gate.gain.setValueAtTime(0, tp);
+    n.start(t, Math.random(), end - t + 0.05); o.start(t); o.stop(end + 0.05); o2.start(t); o2.stop(end + 0.05);
   }
   blowOff() {
     if (!this.car.turbo || this.boost < 0.35) return;
