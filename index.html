@@ -401,7 +401,10 @@ const CAR_ART = {
     shoulder: 100, belt: 86
   },
   vtc: {
-    r: 35, wheels: [136, 374], bottom: 134, rim: { style: "spoke", spokes: 6, color: "#b9bdc4" }, caliper: null, rimRatio: 0.6, flares: "#2b2c30",
+    r: 35, wheels: [136, 374], bottom: 134, rim: { style: "spoke", spokes: 6, color: "#3c3f45" }, caliper: "#c4202a", rimRatio: 0.68, flares: "#7b7f86",
+    paintDark: 0.2, horizonOp: 0.4, spokeW: 0.3, lower: { y: 112, color: "#7b7f86" }, bumperColor: "#7b7f86", mirrorChrome: true,
+    stripe: "M 40 80 L 118 79 L 150 76 L 150 78 L 118 82 L 40 83 Z",
+    spoiler: "M 36 14 L 70 12 L 70 16 L 38 19 Z",
     top: "M 40 134 L 38 120 C 37 96 37 60 38 24 C 38 18 42 15 50 15 L 300 14 C 306 14 309 16 312 20 C 320 34 328 50 336 64 C 370 66 404 67 432 68 C 439 68 442 72 442 80 L 442 124 C 442 130 441 132 440 134",
     glass: "M 52 62 L 52 24 L 300 22 C 308 34 316 48 324 62 Z",
     pillars: ["M 154 22 L 154 62", "M 158 22 L 158 62", "M 236 22 L 238 62", "M 240 22 L 242 62"],
@@ -464,7 +467,7 @@ function wheelSVG(cx, cy, r, spec, u) {
       if (rim.style === "split") { spokes += sp(a - 0.09, 0.05, 0.045, rr * 0.22, rr * 0.95) + sp(a + 0.09, 0.05, 0.045, rr * 0.22, rr * 0.95); }
       else if (rim.style === "y") { spokes += sp(a, 0.16, 0.07, rr * 0.22, rr * 0.55) + sp(a - 0.2, 0.06, 0.05, rr * 0.5, rr * 0.95) + sp(a + 0.2, 0.06, 0.05, rr * 0.5, rr * 0.95); }
       else if (rim.style === "mesh") { spokes += sp(a, 0.07, 0.03, rr * 0.22, rr * 0.95) + sp(a + Math.PI / n, 0.05, 0.03, rr * 0.5, rr * 0.95); }
-      else { const w = n <= 6 ? 0.2 : 0.09; spokes += sp(a, w, w * 0.62, rr * 0.22, rr * 0.95); }
+      else { const w = spec.spokeW || (n <= 6 ? 0.2 : 0.09); spokes += sp(a, w, w * 0.62, rr * 0.22, rr * 0.95); }
     }
     s += `<g fill="url(#rim${u})" stroke="${lo}" stroke-width="0.6">${spokes}</g>`;
     if (rim.style === "mesh") s += `<circle cx="${cx}" cy="${cy}" r="${rr * 0.5}" fill="none" stroke="url(#rim${u})" stroke-width="${rr * 0.06}"/>`;
@@ -482,7 +485,7 @@ function carSVG(car, uid) {
   const ra = r + 5, dx = Math.sqrt(ra * ra - (by - cy) * (by - cy));
   const [xr, xf] = a.wheels;
   const body = `${a.top} L ${(xf + dx).toFixed(1)} ${by} A ${ra} ${ra} 0 1 0 ${(xf - dx).toFixed(1)} ${by} L ${(xr + dx).toFixed(1)} ${by} A ${ra} ${ra} 0 1 0 ${(xr - dx).toFixed(1)} ${by} Z`;
-  const c = car.color, light = mixHex(c, "#ffffff", 0.38), dark = mixHex(c, "#000000", 0.5), mid = mixHex(c, "#000000", 0.12);
+  const c = car.color, light = mixHex(c, "#ffffff", 0.38), dark = mixHex(c, "#000000", a.paintDark || 0.5), mid = mixHex(c, "#000000", (a.paintDark || 0.5) * 0.24);
   const rimC = a.rim.color;
   const defs = `<defs>
     <linearGradient id="paint${u}" x1="0" y1="0" x2="0" y2="1">
@@ -506,6 +509,7 @@ function carSVG(car, uid) {
     <linearGradient id="rim${u}" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="${mixHex(rimC, "#ffffff", 0.55)}"/><stop offset=".5" stop-color="${rimC}"/><stop offset="1" stop-color="${mixHex(rimC, "#000000", 0.35)}"/>
     </linearGradient>
+    <linearGradient id="rim${u}m" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset=".5" stop-color="#9aa0a8"/><stop offset="1" stop-color="#e6e8eb"/></linearGradient>
     <linearGradient id="head${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#9fb4c8"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
     <linearGradient id="tail${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff2a2a"/><stop offset="1" stop-color="#7a0a0a"/></linearGradient>
     <clipPath id="clip${u}"><path d="${body}"/></clipPath>
@@ -518,12 +522,14 @@ function carSVG(car, uid) {
   s += `<path d="${body}" fill="url(#paint${u})"/>`;
   s += `<g clip-path="url(#clip${u})">
     <rect x="0" y="${a.shoulder - 3}" width="480" height="4" fill="url(#sheen${u})"/>
-    <rect x="0" y="${a.shoulder + 1}" width="480" height="${by - a.shoulder}" fill="url(#horizon${u})"/>
+    <rect x="0" y="${a.shoulder + 1}" width="480" height="${by - a.shoulder}" fill="url(#horizon${u})" opacity="${a.horizonOp || 1}"/>
     <rect x="0" y="${by - 10}" width="480" height="12" fill="#000" opacity=".4"/>
     <rect x="0" y="0" width="480" height="${a.belt}" fill="#fff" opacity=".06"/>
     ${a.lines.map((d) => `<path d="${d}" stroke="#000" stroke-opacity=".38" stroke-width="1" fill="none"/>`).join("")}
     ${a.vent ? `<path d="${a.vent}" fill="#08090b"/>` : ""}
     ${a.step ? `<path d="${a.step}" fill="#16171a"/>` : ""}
+    ${a.lower ? `<rect x="0" y="${a.lower.y}" width="480" height="60" fill="${a.lower.color}"/><rect x="0" y="${a.lower.y}" width="480" height="1.5" fill="#000" opacity=".35"/><rect x="0" y="${a.lower.y + 1.5}" width="480" height="3" fill="#fff" opacity=".18"/>` : ""}
+    ${a.stripe ? `<path d="${a.stripe}" fill="#d0202a"/>` : ""}
     <path d="M ${xr - ra - 2} ${by} A ${ra + 2} ${ra + 2} 0 1 1 ${xr + ra + 2} ${by}" fill="none" stroke="#000" stroke-opacity=".35" stroke-width="${a.flares ? 7 : 3}"/>
     <path d="M ${xf - ra - 2} ${by} A ${ra + 2} ${ra + 2} 0 1 1 ${xf + ra + 2} ${by}" fill="none" stroke="#000" stroke-opacity=".35" stroke-width="${a.flares ? 7 : 3}"/>
   </g>`;
@@ -531,13 +537,14 @@ function carSVG(car, uid) {
   s += `<g clip-path="url(#gclip${u})"><rect x="0" y="0" width="480" height="180" fill="url(#refl${u})"/></g>`;
   s += a.pillars.map((d) => `<path d="${d}" stroke="#0a0b0d" stroke-width="4" fill="none"/>`).join("");
   if (a.roofRail) s += `<path d="${a.roofRail}" fill="#1a1b1e"/>`;
+  if (a.spoiler) s += `<path d="${a.spoiler}" fill="url(#paint${u})" stroke="#000" stroke-opacity=".35" stroke-width=".8"/>`;
   s += `<path d="${a.head}" fill="url(#head${u})" stroke="#2a2d33" stroke-width=".8"/>`;
   s += `<path d="${a.tail}" fill="url(#tail${u})" stroke="#3a0606" stroke-width=".8"/>`;
   if (a.wing) s += `<path d="${a.wing}" fill="#1c1d21" stroke="#3a3c42" stroke-width="1"/><path d="${a.wing}" fill="url(#sheen${u})" opacity=".4"/>`;
-  if (a.bumpers) s += a.bumpers.map((d) => `<path d="${d}" fill="#232427" stroke="#0d0d0f" stroke-width=".8"/>`).join("");
+  if (a.bumpers) s += a.bumpers.map((d) => `<path d="${d}" fill="${a.bumperColor || "#232427"}" stroke="#0d0d0f" stroke-width=".8"/>`).join("");
   if (a.flares) [xr, xf].forEach((x) => { s += `<path d="M ${x - ra - 3} ${by + 2} A ${ra + 3} ${ra + 3} 0 1 1 ${x + ra + 3} ${by + 2}" fill="none" stroke="${a.flares}" stroke-width="8"/>`; });
   const [mx, my] = a.mirror;
-  s += `<path d="M ${mx - 2} ${my} C ${mx - 4} ${my - 8} ${mx + 6} ${my - 11} ${mx + 14} ${my - 7} C ${mx + 14} ${my - 2} ${mx + 8} ${my + 1} ${mx - 2} ${my} Z" fill="url(#paint${u})" stroke="#000" stroke-opacity=".4" stroke-width=".8"/>`;
+  s += `<path d="M ${mx - 2} ${my} C ${mx - 4} ${my - 8} ${mx + 6} ${my - 11} ${mx + 14} ${my - 7} C ${mx + 14} ${my - 2} ${mx + 8} ${my + 1} ${mx - 2} ${my} Z" fill="${a.mirrorChrome ? `url(#rim${u}m)` : `url(#paint${u})`}" stroke="#000" stroke-opacity=".4" stroke-width=".8"/>`;
   const [hx, hy] = a.handle;
   s += `<rect x="${hx - 9}" y="${hy - 1.6}" width="18" height="3.2" rx="1.6" fill="#000" opacity=".35"/>`;
   s += wheelSVG(xr, cy, r, a, u) + wheelSVG(xf, cy, r, a, u);
