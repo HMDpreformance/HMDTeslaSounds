@@ -5,7 +5,7 @@ This makes the app follow your real accelerator pedal. GPS still gives the speed
 ## Parts (about $20-40)
 - An ESP32 dev board (any ESP32 with Wi-Fi; it has a CAN controller built in)
 - An SN65HVD230 CAN transceiver module (3.3 V)
-- A Tesla Model 3/Y diagnostic-port to OBD2 adapter cable (the 20-pin connector behind the centre console)
+- A **Model 3 Highland (2024+)** OBD2 / CAN adapter cable. The Highland moved the connector, so older Model 3 cables don't fit. Its harness sits behind the plastic trim next to the driver's door hinge and needs a Highland-specific Y-cable. Search for "Model 3 Highland OBD2 adapter". Make sure the cable breaks out the **vehicle CAN** bus.
 - A USB power lead for the ESP32 (from a car USB port)
 
 ## Wiring
@@ -31,4 +31,4 @@ Go to Settings → **Pedal link**, type the same code, and press **Connect**. Th
 ## Notes
 - The ESP32 runs in listen-only mode, so it never sends anything on the car's bus.
 - Data goes through the free public broker `broker.hivemq.com`. It only carries a 0-100 number on your code's topic, so use a code nobody else would guess.
-- These CAN IDs are for the Model 3/Y. A Model S/X uses different messages.
+- Pedal message 0x118 comes from the community Model 3 CAN database. It should still be there on the Highland, but nobody has confirmed it on a 2024 car yet. If the Serial Monitor stays at `pedal 0%` while you press the pedal, send me a screenshot of the output and I'll find the right message.
