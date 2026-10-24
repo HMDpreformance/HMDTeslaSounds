@@ -1705,7 +1705,8 @@ function step(dt) {
     let t = 0;
     const accel = carSpd ? pedal.acc : gps.accel;
     if (state.v > 0.6) {
-      t = accel < -0.5 ? 0.02 : clamp(0.14 + accel * state.sens / 2.5, 0, 1);
+      // a Model 3 pulls ~6-7 m/s² flat out, so only that reads as full throttle; normal driving sits around 30-60 %
+      t = accel < -0.5 ? 0.02 : 0.12 + 0.88 * Math.pow(clamp(accel * state.sens / 6.5, 0, 1), 0.85);
     }
     if (pedalFresh(now)) t = pedal.v; // real pedal beats the GPS estimate
     state.thrTarget = Math.max(t, state.gas ? 1 : 0);
