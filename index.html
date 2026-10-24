@@ -299,6 +299,12 @@ body.fs .cluster { border: 0; background: transparent; }
           <button id="flyLight" aria-pressed="false">Light race</button>
         </div>
         <span></span>
+        <span>Intake</span>
+        <div class="seg" role="group" aria-label="Air filter" style="justify-self:start">
+          <button id="inStock" aria-pressed="true">Stock airbox</button>
+          <button id="inRace" aria-pressed="false">Race filter</button>
+        </div>
+        <span></span>
         <span class="turbo-row">Turbo</span>
         <div class="seg turbo-row" role="group" aria-label="VTC turbo" style="justify-self:start">
           <button id="turboOff" aria-pressed="true">NA</button>
@@ -1256,6 +1262,7 @@ class EngineSound {
     this.bangGain.gain.setTargetAtTime(mul * 0.9, t, 0.03);
     this.drive.gain.setTargetAtTime(0.6 + thr * cfg.drive * 0.22 + retard * 0.5, t, 0.01);
     this.out.gain.setTargetAtTime((0.7 + 0.3 * thr + 0.1 * rn) * mul * (cfg.level || 1), t, 0.03);
+    this.intakeUpdate(rpm, thr, rn, mul, t);
     if (this.sc) {
       this.sc.frequency.setTargetAtTime(rpm * car.sc, t, 0.02);
       this.scg.gain.setTargetAtTime(0.035 * rn * (0.25 + thr), t, 0.05);
@@ -1304,6 +1311,60 @@ class EngineSound {
       const d = this.duck.gain;
       d.cancelScheduledValues(t0); d.setTargetAtTime(0.3, t0, 0.002); d.setTargetAtTime(1, t0 + 0.05, 0.05);
     }
+  }
+  // open cone filter: induction roar pulsing with each intake stroke, a suck on tip-in and a "chuff" on lift
+  intakeUpdate(rpm, thr, rn, mul, t) {
+    const on = state.intake === "race";
+    if (!this.ik) {
+      if (!on) return;
+      const n = noiseSrc(), bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 1.3;
+      const lo = ctx.createBiquadFilter(); lo.type = "peaking"; lo.frequency.value = 180; lo.Q.value = 1.2; lo.gain.value = 6;
+      const am = ctx.createGain(); am.gain.value = 0; // gated by the firing-rate oscillator below
+      const pulse = ctx.createOscillator(), depth = ctx.createGain(); pulse.type = "sine"; depth.gain.value = 0;
+      pulse.connect(depth); depth.connect(am.gain);
+      const g = ctx.createGain(); g.gain.value = 0;
+      n.connect(bp); bp.connect(lo); lo.connect(am); am.connect(g); g.connect(this.out);
+      pulse.start(); this.nodes.push(n, pulse);
+      this.ik = { bp, am, pulse, depth, g, armed: false, prev: 0 };
+    }
+    const k = this.ik, fire = rpm / 120 * this.cfg.offsets.length;
+    k.bp.frequency.setTargetAtTime(260 + rn * 900 + thr * 300, t, 0.05);
+    k.pulse.frequency.setTargetAtTime(Math.max(5, fire), t, 0.02);
+    k.am.gain.setTargetAtTime(0.55, t, 0.05); k.depth.gain.setTargetAtTime(0.45, t, 0.05);
+    k.g.gain.setTargetAtTime(on ? (0.12 + 1.1 * thr * (0.35 + rn)) * mul : 0, t, 0.06);
+    if (!on) return;
+    // throttle snapping open: the big "chuoo" as the filter gulps air
+    if (thr < 0.12) k.closed = true;
+    if (k.closed && thr > 0.3) { k.closed = false; this.chuff(1, mul, 1); }
+    if (thr > 0.45) k.armed = true;
+    if (k.armed && thr < 0.2) { k.armed = false; if (rpm > 1800) this.chuff(0.35 + 0.3 * rn, mul, 0); } // small puff on lift
+    k.prev = thr;
+  }
+  chuff(a, mul, open) {
+    const t = ctx.currentTime + 0.005; a *= 1.8; // on its own bus so the engine's compressor can't swallow it
+    if (open) { // "chuoo": a breathy "ch" burst that falls into a hollow "oo" as the intake tract resonates
+      const D = 0.26;
+      const n = noiseSrc(), hp = ctx.createBiquadFilter(); hp.type = "bandpass"; hp.Q.value = 0.9;
+      hp.frequency.setValueAtTime(2600, t); hp.frequency.exponentialRampToValueAtTime(900, t + 0.06);
+      const hg = ctx.createGain(); hg.gain.setValueAtTime(0.0001, t);
+      hg.gain.exponentialRampToValueAtTime(0.9 * a * mul, t + 0.006); hg.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+      const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 3.2;
+      bp.frequency.setValueAtTime(900, t); bp.frequency.exponentialRampToValueAtTime(330, t + D);
+      const og = ctx.createGain(); og.gain.setValueAtTime(0.0001, t);
+      og.gain.exponentialRampToValueAtTime(2.6 * a * mul, t + 0.03); og.gain.exponentialRampToValueAtTime(0.0005, t + D);
+      const wo = ctx.createOscillator(), wg = ctx.createGain(); // low body "whoomp"
+      wo.frequency.setValueAtTime(140, t); wo.frequency.exponentialRampToValueAtTime(70, t + 0.15);
+      wg.gain.setValueAtTime(0.0001, t); wg.gain.exponentialRampToValueAtTime(0.35 * a * mul, t + 0.02); wg.gain.exponentialRampToValueAtTime(0.0005, t + 0.18);
+      n.connect(hp); hp.connect(hg); hg.connect(turboBus); n.connect(bp); bp.connect(og); og.connect(turboBus);
+      wo.connect(wg); wg.connect(turboBus); wo.start(t); wo.stop(t + 0.2);
+      n.start(t, Math.random(), D + 0.05);
+      return;
+    }
+    const D = 0.14, n = noiseSrc(), bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 1.1;
+    bp.frequency.setValueAtTime(1000, t); bp.frequency.exponentialRampToValueAtTime(280, t + D);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(a * 1.2 * mul, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0005, t + D);
+    n.connect(bp); bp.connect(g); g.connect(turboBus); n.start(t, Math.random(), D + 0.05);
   }
   // afterfire: opens a window in which unburnt fuel ignites in the exhaust
   pop(delay, strength) {
@@ -1481,6 +1542,7 @@ const state = {
   carIdx: clamp(store.get("car", 0), 0, CARS.length - 1),
   units: store.get("units", "kmh"),
   fly: store.get("fly", "stock"),
+  intake: store.get("intake", "stock"),
   cam: store.get("cam", "stock"),
   turbo: store.get("turbo", false),
   volume: store.get("vol", 0.8),
@@ -2064,6 +2126,14 @@ function setFly(f) {
   $("flyLight").setAttribute("aria-pressed", String(f === "light"));
 }
 setFly(state.fly);
+function setIntake(m) {
+  state.intake = m; store.set("intake", m);
+  $("inStock").setAttribute("aria-pressed", String(m === "stock"));
+  $("inRace").setAttribute("aria-pressed", String(m === "race"));
+}
+setIntake(state.intake);
+$("inStock").addEventListener("click", () => setIntake("stock"));
+$("inRace").addEventListener("click", () => setIntake("race"));
 function setCam(m) {
   state.cam = m; store.set("cam", m);
   $("camStock").setAttribute("aria-pressed", String(m === "stock"));
