@@ -33,7 +33,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
-@media (min-width: 900px) { html { zoom: 0.72; } } /* zoomed out so the whole dash fits the Tesla screen (phones keep full size) */
+@media (min-width: 560px) { html { zoom: 0.72; } } /* zoomed out so the whole dash fits the Tesla browser window (phones keep full size) */
 body {
   margin: 0;
   background: radial-gradient(1200px 500px at 70% -10%, rgba(255, 122, 0, 0.16), transparent 70%), var(--bg);
@@ -90,7 +90,7 @@ main.grid {
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: 14px;
 }
-@media (max-width: 820px) { main.grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 559px) { main.grid { grid-template-columns: minmax(0, 1fr); } } /* matches the zoom breakpoint: zoomed screens keep two columns */
 @media (max-width: 520px) { .brand b { display: none; } .brand img { height: 48px; } }
 
 .card {
