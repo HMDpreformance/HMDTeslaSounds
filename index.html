@@ -1324,7 +1324,7 @@ class EngineSound {
       pulse.connect(depth); depth.connect(am.gain);
       const g = ctx.createGain(); g.gain.value = 0;
       n.connect(bp); bp.connect(lo); lo.connect(am); am.connect(g); g.connect(this.out);
-      pulse.start(); this.nodes.push(n, pulse);
+      n.start(0, Math.random()); pulse.start(); this.nodes.push(n, pulse);
       this.ik = { bp, am, pulse, depth, g, armed: false, prev: 0 };
     }
     const k = this.ik, fire = rpm / 120 * this.cfg.offsets.length;
