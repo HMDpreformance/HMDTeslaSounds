@@ -2,7 +2,8 @@
 
 This makes the app follow your real accelerator pedal and the car's own speed, read from the CAN bus. Speed from the car is instant and works in tunnels. If the dongle drops out, the app switches back to GPS on its own.
 
-There are two ways to run it:
+Ways to run it:
+- **Phone + Bluetooth LE OBD2 adapter (Vgate iCar Pro BLE, OBDLink CX…)**: no laptop and no wiring. Plug the adapter into the SL Elements Highland cable, then open https://hmdpreformance.github.io/HMDTeslaSounds/bridge.html on your phone (Chrome on Android, or Bluefy on iPhone). Type your code, tap Connect adapter, and pick the adapter. In the app on the Tesla, enter the same code under Pedal link.
 - **ESP32 dongle** (`hmd_pedal/`): a small permanent box that runs off your phone's hotspot.
 - **Laptop + your ordinary ELM327 OBD2 adapter** (`laptop/hmd_pedal_elm.py`): the quickest test. Chain: car → SL Elements Highland cable → your OBD2 adapter → laptop. Run `pip install pyserial paho-mqtt`, then `python3 hmd_pedal_elm.py --code hamad1 --port COM5` (USB/Bluetooth) or `--tcp 192.168.0.10:35000` (Wi-Fi adapter). You get about 10 updates/s, or more with `--pedal-only`.
 - **Laptop + USB-CAN adapter** (`laptop/hmd_pedal_laptop.py`): good for testing. Use a CANable or another candleLight/slcan adapter on the same Highland cable. Run `pip install python-can paho-mqtt`, then `python3 hmd_pedal_laptop.py --code hamad1`. Add `--sniff` to print the raw frames.

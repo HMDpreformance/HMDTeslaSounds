@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HMD Pedal Bridge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira:ital,wdth,wght@1,110,700;1,125,800&family=Barlow:wght@400;600&display=swap">
+<style>
+:root { --bg: #050506; --card: #111214; --line: #2c2d31; --fg: #f1f2f4; --muted: #8b8e96; --accent: #ff7a00; --ok: #35d07f; --red: #ff3b3b; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.45 Barlow, system-ui, sans-serif; padding: 20px 16px 40px; }
+main { max-width: 480px; margin: 0 auto; display: grid; gap: 14px; }
+h1 { font: italic 800 26px/1 Saira, sans-serif; font-stretch: 125%; margin: 4px 0 0; letter-spacing: .5px; }
+h1 span { color: var(--accent); }
+p { margin: 0; color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: grid; gap: 12px; }
+label { font-weight: 600; font-size: 14px; color: var(--muted); }
+input { width: 100%; background: #0a0a0b; color: var(--fg); border: 1px solid var(--line); border-radius: 10px; padding: 12px; font: inherit; }
+button { width: 100%; border: 0; border-radius: 12px; padding: 15px; font: italic 700 18px Saira, sans-serif; font-stretch: 110%; color: #111; background: var(--accent); cursor: pointer; }
+button.ghost { background: #1c1d20; color: var(--fg); border: 1px solid var(--line); }
+button:disabled { opacity: .5; }
+.live { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.big { background: #0a0a0b; border: 1px solid var(--line); border-radius: 14px; padding: 14px; text-align: center; }
+.big b { display: block; font: italic 800 44px/1 Saira, sans-serif; font-stretch: 110%; }
+.big small { color: var(--muted); }
+.bar { height: 8px; background: #1c1d20; border-radius: 4px; overflow: hidden; margin-top: 10px; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .08s; }
+.status { display: flex; gap: 8px; align-items: center; font-weight: 600; }
+.status i { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.status.on i { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.status.err i { background: var(--red); }
+pre { margin: 0; max-height: 160px; overflow: auto; font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>HMD <span>Pedal Bridge</span></h1>
+  <p>Run this on your phone. It reads pedal and speed from a Bluetooth LE OBD2 adapter (like the Vgate iCar Pro BLE) plugged into the car, and sends them to HMD Engine Sounds on the Tesla screen.</p>
+
+  <div class="card">
+    <label for="code">Pedal link code (type the same one in the app on the Tesla)</label>
+    <input id="code" autocomplete="off" spellcheck="false" maxlength="24" placeholder="hamad1">
+    <button id="go">Connect adapter</button>
+    <button id="stop" class="ghost" hidden>Disconnect</button>
+    <div class="status" id="bt"><i></i><span>Adapter: not connected</span></div>
+    <div class="status" id="net"><i></i><span>Relay: not connected</span></div>
+  </div>
+
+  <div class="card">
+    <div class="live">
+      <div class="big"><b id="ped">–</b><small>pedal %</small><div class="bar"><i id="pedBar"></i></div></div>
+      <div class="big"><b id="spd">–</b><small>km/h</small></div>
+    </div>
+    <p id="rate">0 updates/s</p>
+  </div>
+
+  <div class="card">
+    <label>Adapter log</label>
+    <pre id="log"></pre>
+  </div>
+  <p>Needs Chrome on Android, or the free Bluefy browser on iPhone, because Safari can't connect to Bluetooth. Keep this page open with the screen on while you drive.</p>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const BROKER = new URLSearchParams(location.search).get("broker") || "wss://broker.hivemq.com:8884/mqtt";
+// ELM327 BLE adapters use one of these GATT services (Vgate iCar Pro BLE: FFF0, notify FFF1 / write FFF2)
+const SERVICES = [0xfff0, 0xffe0, 0x18f0, "e7810a71-73ae-499d-8c15-faa9aef0c3f2", "0000fff0-0000-1000-8000-00805f9b34fb"];
+let dev = null, rx = null, tx = null, mq = null, running = false, wake = null;
+let inbuf = "", waiters = [], lineSink = null;
+let pedal = null, speed = null, sent = 0, lastPub = 0;
+try { $("code").value = localStorage.getItem("hmdsound.pedalCode")?.replace(/"/g, "") || ""; } catch (e) {}
+
+function log(s) { const l = $("log"); l.textContent = (l.textContent + s + "\n").slice(-3000); l.scrollTop = 1e9; }
+function status(id, st, text) { const el = $(id); el.className = "status " + st; el.lastElementChild.textContent = text; }
+
+function loadMqtt() {
+  if (window.mqtt) return Promise.resolve(window.mqtt);
+  const add = (src) => new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = () => (window.mqtt ? ok(window.mqtt) : bad()); s.onerror = bad; document.head.appendChild(s); });
+  return add("mqtt.min.js").catch(() => add("https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"));
+}
+
+// ---- ELM327 over BLE ----
+function onData(e) {
+  inbuf += new TextDecoder().decode(e.target.value);
+  let i;
+  while ((i = inbuf.search(/[\r>]/)) >= 0) {
+    const ch = inbuf[i], ln = inbuf.slice(0, i).trim(); inbuf = inbuf.slice(i + 1);
+    if (ln) { if (lineSink) lineSink(ln); else if (waiters[0]) waiters[0].lines.push(ln); }
+    if (ch === ">" && waiters[0]) { const w = waiters.shift(); clearTimeout(w.to); w.ok(w.lines); }
+  }
+}
+async function write(s) {
+  const data = new TextEncoder().encode(s);
+  for (let i = 0; i < data.length; i += 20) { // BLE packets are small
+    const part = data.slice(i, i + 20);
+    if (tx.properties.writeWithoutResponse) await tx.writeValueWithoutResponse(part); else await tx.writeValue(part);
+  }
+}
+function cmd(c, ms = 1500) {
+  return new Promise(async (ok) => {
+    const w = { lines: [], ok, to: setTimeout(() => { waiters = waiters.filter((x) => x !== w); ok(w.lines); }, ms) };
+    waiters.push(w); await write(c + "\r");
+  });
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function parse(ln) {
+  ln = ln.replace(/\s/g, "");
+  if (ln.length < 5 || !/^[0-9A-Fa-f]+$/.test(ln)) return;
+  const id = parseInt(ln.slice(0, 3), 16), hex = ln.slice(3), d = [];
+  for (let i = 0; i + 1 < hex.length; i += 2) d.push(parseInt(hex.slice(i, i + 2), 16));
+  if (id === 0x118 && d.length >= 5) pedal = Math.min(100, Math.round(d[4] * 0.4));
+  else if (id === 0x257 && d.length >= 3) speed = Math.max(0, ((((d[1] >> 4) | (d[2] << 4)) & 0xfff) * 0.08) - 40);
+}
+// listen to one CAN ID for a short window, then stop the monitor (any key stops ATMA)
+async function monitor(id, frames, ms) {
+  await cmd("ATCRA" + id, 800);
+  let got = 0;
+  await new Promise(async (done) => {
+    const finish = () => { lineSink = null; clearTimeout(t); done(); };
+    lineSink = (ln) => { if (ln.includes("STOPPED") || ln.includes("BUFFER")) return; parse(ln); if (++got >= frames) finish(); };
+    const t = setTimeout(finish, ms);
+    await write("ATMA\r");
+  });
+  await cmd("", 600); // the CR stops monitoring and we wait for the prompt
+}
+
+function publish() {
+  const now = performance.now();
+  if (pedal === null) return;
+  $("ped").textContent = pedal; $("pedBar").style.width = pedal + "%";
+  $("spd").textContent = speed === null ? "–" : Math.round(speed);
+  if (mq && mq.connected && now - lastPub > 30) {
+    mq.publish("hmdsound/" + code() + "/pedal", speed === null ? String(pedal) : pedal + "," + speed.toFixed(1));
+    lastPub = now; sent++;
+  }
+}
+const code = () => $("code").value.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+setInterval(() => { $("rate").textContent = sent + " updates/s"; sent = 0; }, 1000);
+
+async function connect() {
+  if (!code()) { $("code").focus(); return; }
+  try { localStorage.setItem("hmdsound.pedalCode", JSON.stringify(code())); } catch (e) {}
+  if (!navigator.bluetooth) { status("bt", "err", "This browser has no Bluetooth. Use Chrome on Android or Bluefy on iPhone."); return; }
+  $("go").disabled = true;
+  try {
+    // relay first, so readings go out as soon as they arrive
+    const m = await loadMqtt();
+    mq = m.connect(BROKER, { clientId: "hmdbridge-" + Math.random().toString(16).slice(2, 10), reconnectPeriod: 2000 });
+    mq.on("connect", () => status("net", "on", "Relay: connected · code " + code()));
+    mq.on("offline", () => status("net", "", "Relay: reconnecting…"));
+    mq.on("error", () => status("net", "err", "Relay: error"));
+
+    dev = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: SERVICES });
+    status("bt", "", "Adapter: connecting to " + (dev.name || "device") + "…");
+    dev.addEventListener("gattserverdisconnected", () => { status("bt", "err", "Adapter: disconnected"); running = false; });
+    const gatt = await dev.gatt.connect();
+    for (const s of await gatt.getPrimaryServices()) {
+      let chars = []; try { chars = await s.getCharacteristics(); } catch (e) { continue; }
+      for (const c of chars) {
+        if (!rx && (c.properties.notify || c.properties.indicate)) rx = c;
+        if (!tx && (c.properties.write || c.properties.writeWithoutResponse)) tx = c;
+      }
+      if (rx && tx) break;
+    }
+    if (!rx || !tx) throw new Error("no serial characteristic found on this adapter");
+    await rx.startNotifications(); rx.addEventListener("characteristicvaluechanged", onData);
+    status("bt", "", "Adapter: setting up…");
+    for (const c of ["ATZ", "ATE0", "ATL0", "ATS0", "ATH1", "ATSP6", "ATCAF0", "ATAL"]) log(c + " → " + (await cmd(c, c === "ATZ" ? 3000 : 1500)).join(" "));
+    status("bt", "on", "Adapter: " + (dev.name || "connected") + " · reading");
+    try { wake = await navigator.wakeLock?.request("screen"); } catch (e) {}
+    $("go").hidden = true; $("stop").hidden = false;
+    running = true;
+    while (running) { // pedal is read 4× as often as speed
+      await monitor("118", 4, 250); publish();
+      await monitor("257", 1, 250); publish();
+    }
+  } catch (e) {
+    log("error: " + e.message); status("bt", "err", "Adapter: " + e.message);
+  }
+  $("go").disabled = false;
+}
+function stop() {
+  running = false; lineSink = null;
+  try { dev && dev.gatt.connected && dev.gatt.disconnect(); } catch (e) {}
+  try { mq && mq.end(true); } catch (e) {}
+  try { wake && wake.release(); } catch (e) {}
+  rx = tx = null; $("go").hidden = false; $("stop").hidden = true;
+  status("bt", "", "Adapter: not connected"); status("net", "", "Relay: not connected");
+}
+$("go").addEventListener("click", connect);
+$("stop").addEventListener("click", stop);
+</script>
+</body>
+</html>
