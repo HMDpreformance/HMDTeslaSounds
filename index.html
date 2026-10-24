@@ -1619,11 +1619,11 @@ function onPos(p) {
   // acceleration = slope of speed over the last ~1.5 s, timed on arrival: some browsers (Tesla's included)
   // send repeated or coarse fix timestamps, which made a fix-to-fix difference read as zero
   const now = performance.now() / 1000, h = gps.hist;
-  h.push([now, s]); while (h.length > 2 && now - h[0][0] > 1.5) h.shift();
+  h.push([now, s]); while (h.length > 2 && now - h[0][0] > 1.2) h.shift();
   if (h.length >= 2 && now - h[0][0] > 0.25) {
     let mt = 0, ms = 0; for (const [ht, hs] of h) { mt += ht; ms += hs; } mt /= h.length; ms /= h.length;
     let num = 0, den = 0; for (const [ht, hs] of h) { num += (ht - mt) * (hs - ms); den += (ht - mt) * (ht - mt); }
-    gps.accel = lerp(gps.accel, den > 0 ? clamp(num / den, -10, 10) : 0, 0.7);
+    gps.accel = lerp(gps.accel, den > 0 ? clamp(num / den, -10, 10) : 0, 0.9); // trust each new fix almost fully: react on the first update
   }
   gps.speed = s; gps.t = performance.now() / 1000; gps.last = here; gps.acc = c.accuracy;
   setGps("on", "GPS ±" + Math.round(c.accuracy) + " m");
@@ -1716,7 +1716,7 @@ function step(dt) {
       state.v = lerp(state.v, pedal.spd, 1 - Math.exp(-dt * 12));
     } else if (gps.status === "on" && age < 5) {
       const predicted = Math.max(0, gps.speed + gps.accel * Math.min(age, 1.2));
-      state.v = lerp(state.v, predicted, 1 - Math.exp(-dt * 4));
+      state.v = lerp(state.v, predicted, 1 - Math.exp(-dt * 8)); // follow fast; the accel prediction fills the gap between fixes
     } else {
       state.v = Math.max(0, state.v - 2 * dt);
     }
