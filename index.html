@@ -258,6 +258,7 @@ body.fs .cluster { border: 0; background: transparent; }
     <div class="pills">
       <span class="pill" id="gpsPill"><i></i><span>GPS off</span></span>
       <span class="pill" id="engPill"><i></i><span>Engine off</span></span>
+      <span class="pill" id="pedalPill" hidden><i></i><span>Pedal</span></span>
     </div>
   </header>
 
@@ -317,6 +318,12 @@ body.fs .cluster { border: 0; background: transparent; }
           <button id="uMph" aria-pressed="false">mph</button>
         </div>
         <span></span>
+        <label for="pedalCode">Pedal link</label>
+        <div class="seg" style="justify-self:start">
+          <input id="pedalCode" placeholder="dongle code" autocomplete="off" spellcheck="false" maxlength="24" style="width:9.5em;background:#111214;color:var(--fg);border:1px solid #2c2d31;border-radius:9px;padding:6px 9px;font:inherit">
+          <button id="pedalBtn" aria-pressed="false">Connect</button>
+        </div>
+        <output id="pedalOut">GPS only</output>
       </div>
     </section>
   </main>
@@ -1544,6 +1551,49 @@ function onPos(p) {
   gps.speed = s; gps.t = performance.now() / 1000; gps.last = here; gps.acc = c.accuracy;
   setGps("on", "GPS ±" + Math.round(c.accuracy) + " m");
 }
+// Pedal link: an ESP32 on the car's CAN bus publishes the real accelerator position (0-100) over MQTT.
+// GPS still sets speed; the pedal sets throttle whenever its data is fresh, and GPS takes over again if it drops out.
+const PEDAL_BROKER = new URLSearchParams(location.search).get("broker") || "wss://broker.hivemq.com:8884/mqtt";
+const pedal = { v: 0, t: -10, client: null, code: store.get("pedalCode", "") };
+function pedalFresh(now) { return now - pedal.t < 0.6; }
+function setPedal(st, label) {
+  const p = $("pedalPill"); p.hidden = st === "off"; p.className = "pill " + st; p.lastElementChild.textContent = label;
+  $("pedalOut").textContent = st === "on" ? "Live" : st === "wait" ? "Waiting…" : st === "err" ? "Error" : "GPS only";
+  $("pedalBtn").setAttribute("aria-pressed", st === "off" ? "false" : "true");
+  $("pedalBtn").textContent = st === "off" ? "Connect" : "Disconnect";
+}
+function loadMqtt() {
+  if (window.mqtt) return Promise.resolve(window.mqtt);
+  const add = (src) => new Promise((ok, bad) => {
+    const sc = document.createElement("script"); sc.src = src;
+    sc.onload = () => (window.mqtt ? ok(window.mqtt) : bad()); sc.onerror = bad; document.head.appendChild(sc);
+  });
+  return add("mqtt.min.js").catch(() => add("https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js")); // local copy first, CDN as backup
+}
+function pedalDisconnect() {
+  if (pedal.client) { try { pedal.client.end(true); } catch (e) {} }
+  pedal.client = null; pedal.t = -10; setPedal("off");
+}
+async function pedalConnect(code) {
+  pedalDisconnect();
+  code = code.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+  if (!code) return;
+  pedal.code = code; store.set("pedalCode", code); $("pedalCode").value = code;
+  setPedal("wait", "Pedal: connecting");
+  try {
+    const m = await loadMqtt();
+    const cl = m.connect(PEDAL_BROKER, { clientId: "hmdsound-" + Math.random().toString(16).slice(2, 10), reconnectPeriod: 2000, connectTimeout: 8000, clean: true });
+    pedal.client = cl;
+    cl.on("connect", () => { cl.subscribe("hmdsound/" + code + "/pedal", { qos: 0 }); setPedal("wait", "Pedal: waiting for dongle"); });
+    cl.on("message", (_, msg) => {
+      const v = parseFloat(new TextDecoder().decode(msg));
+      if (!isFinite(v)) return;
+      pedal.v = clamp(v / 100, 0, 1); pedal.t = performance.now() / 1000;
+    });
+    cl.on("error", () => setPedal("err", "Pedal: error"));
+    cl.on("offline", () => setPedal("wait", "Pedal: reconnecting"));
+  } catch (e) { setPedal("err", "Pedal: can't load"); }
+}
 function setGps(st, label) {
   gps.status = st;
   const p = $("gpsPill"); p.className = "pill " + st; p.lastElementChild.textContent = label;
@@ -1586,6 +1636,7 @@ function step(dt) {
     if (state.v > 0.6) {
       t = gps.accel < -0.5 ? 0.02 : clamp(0.14 + gps.accel * state.sens / 2.5, 0, 1);
     }
+    if (pedalFresh(now)) t = pedal.v; // real pedal beats the GPS estimate
     state.thrTarget = Math.max(t, state.gas ? 1 : 0);
     state.acc = state.v > 0.6 ? gps.accel : 0;
   }
@@ -2037,6 +2088,16 @@ $("bangVol").addEventListener("input", (e) => {
   if (bangBus) bangBus.gain.setTargetAtTime(state.volume * state.bangVol, ctx.currentTime, 0.05);
   if (turboBus) turboBus.gain.setTargetAtTime(state.volume, ctx.currentTime, 0.05);
 });
+$("pedalCode").value = pedal.code;
+$("pedalBtn").addEventListener("click", () => { pedal.client ? pedalDisconnect() : pedalConnect($("pedalCode").value); });
+$("pedalCode").addEventListener("keydown", (e) => { if (e.key === "Enter") pedalConnect(e.target.value); });
+setInterval(() => { // live / stale indicator
+  if (!pedal.client) return;
+  const now = performance.now() / 1000;
+  if (pedalFresh(now)) setPedal("on", "Pedal " + Math.round(pedal.v * 100) + "%");
+  else if (pedal.t > 0) setPedal("wait", "Pedal: no data (GPS)");
+}, 250);
+if (pedal.code) pedalConnect(pedal.code);
 $("sens").value = Math.round(state.sens * 100); $("sensOut").textContent = state.sens.toFixed(1) + "×";
 $("sens").addEventListener("input", (e) => {
   state.sens = e.target.value / 100; store.set("sens", state.sens);
