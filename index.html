@@ -279,7 +279,7 @@ body.fs .cluster { border: 0; background: transparent; }
         <button class="pedal gas" id="gasBtn">Rev</button>
         <button class="pedal brake" id="brakeBtn" hidden>Brake</button>
       </div>
-      <p class="hint" id="hint">GPS mode follows your real speed. Hold Rev to blip the engine while stopped.</p>
+      <p class="hint" id="hint">GPS mode follows your real speed. Hold Rev to knock it into neutral and rev it, even on the move.</p>
     </section>
 
     <section class="card side" aria-label="Garage">
@@ -1744,10 +1744,15 @@ function step(dt) {
   // 3. gear selection
   if (state.engine === "on" && !c.ev) {
     const stopped = kmh < 2;
-    if (stopped && !(state.mode === "demo" && state.gas)) {
+    const revInN = state.mode === "gps" && state.gas; // GPS mode: holding Rev knocks it into neutral, even on the move
+    if (revInN || (stopped && !(state.mode === "demo" && state.gas))) {
       state.gear = 0;
     } else {
-      if (state.gear === 0) state.gear = 1;
+      if (state.gear === 0) { // back in gear: drop straight into the one that suits the speed
+        let g = 1;
+        while (g < c.gears.length && rpmInGear(c, kmh, g) > 0.5 * c.redline) g++;
+        state.gear = g; state.shiftCool = 0.5;
+      }
       const r = rpmInGear(c, kmh, state.gear);
       const upPt = lerp(0.42, 0.97, clamp(state.thr * 1.15, 0, 1)) * c.redline;
       const downPt = lerp(0.24, 0.6, state.thr) * c.redline;
@@ -2137,7 +2142,7 @@ function setMode(m) {
   $("gasBtn").textContent = m === "demo" ? "Gas" : "Rev";
   $("hint").textContent = m === "demo"
     ? "Demo mode drives a virtual car. Hold Gas to accelerate and Brake to slow down. Keyboard: arrow up and arrow down."
-    : "GPS mode follows your real speed. Hold Rev to blip the engine while stopped.";
+    : "GPS mode follows your real speed. Hold Rev to knock it into neutral and rev it, even on the move.";
   if (m === "gps") { if (state.engine !== "off") startGps(); }
   else { stopGps(); }
   state.v = 0;
