@@ -1753,14 +1753,15 @@ function step(dt) {
       const downPt = lerp(0.24, 0.6, state.thr) * c.redline;
       if (state.shiftCool <= 0) {
         if (state.gear < c.gears.length && r > upPt) {
-          state.gear++; state.shiftTimer = c.shiftTime; state.shiftCool = 0.7;
+          state.gear++; state.shiftTimer = c.shiftTime; state.shiftCool = 0.7; state.upAt = now;
           if (snd && state.thr > 0.7) { // flat-shift: spark cut and heavily retarded (about -20°), it fires hard
             snd.bangFx(0.01, 0.9 + 0.25 * state.agg);
             if (Math.random() < 0.75) snd.bangFx(c.shiftTime * 0.5 + 0.04, 0.6 + 0.2 * state.agg);
             state.retard = 1;
           }
           if (snd && c.turbo && c.shiftTime > 0.2) snd.blowOff();
-        } else if (state.gear > 1 && r < downPt && rpmInGear(c, kmh, state.gear - 1) < upPt * 0.92) {
+        } else if (state.gear > 1 && r < downPt && rpmInGear(c, kmh, state.gear - 1) < upPt * 0.92 &&
+                   (now - (state.upAt || -10) > 2.5 || state.acc < -1)) { // no hunting back down right after an upshift
           state.gear--; state.shiftTimer = 0.1; state.shiftCool = 0.6;
           // off-throttle downshift: a rev-matching throttle blip ("braap"), then the overrun crackles
           if (state.thr < 0.35) { state.blipT = BLIP_LEN; state.blipAmt = 0.14 + 0.06 * Math.random(); }
@@ -1854,7 +1855,9 @@ function step(dt) {
   if (snd) {
     let mul = state.engine === "starting" ? (now < state.startAt ? 0 : 1) : (state.engine === "on" ? 1 : 0);
     const shiftCut = state.shiftTimer > 0 && state.gear !== 0;
-    const cut = shiftCut || state.limCut;
+    // only a flat-shift kills the spark; a normal shift just closes the throttle, so the engine keeps sounding as revs fall
+    const flatShift = shiftCut && state.thr > 0.7;
+    const cut = flatShift || state.limCut;
     // aim for one or two exhaust bangs per cut, whatever the cylinder count and rpm
     const events = Math.max(1, state.rpm / 120 * (c.cyl || 4) * (state.limCut ? 0.07 * state.agg : c.shiftTime || 0.1));
     const bangs = state.limCut ? 0.6 * state.agg : (shiftCut && state.thr > 0.5 ? 0.6 * state.agg : 0);
@@ -1862,7 +1865,7 @@ function step(dt) {
     const cranking = state.engine === "starting" && now < state.startAt;
     // the first few firings after the catch are big, rich bangs
     const catchThr = state.engine === "starting" && now >= state.startAt ? 0.5 * Math.exp(-(now - state.startAt) * 4) : 0;
-    let thrAudio = Math.max(cut ? state.thr * 0.3 : state.thr, catchThr), coughing = false, mis = 0;
+    let thrAudio = Math.max(cut ? state.thr * 0.3 : shiftCut ? state.thr * 0.35 : state.thr, catchThr), coughing = false, mis = 0;
     if (state.blipT > 0) thrAudio = Math.max(thrAudio, 0.25 + 0.6 * blipEnv()); // the engine sounds loaded during the blip
     if (cranking && snd.crank && snd.crank.coughs) {
       const e = now - (state.startAt - snd.crank.n / snd.crank.rate);
