@@ -1256,7 +1256,7 @@ class EngineSound {
     const cfg = this.cfg;
     // overrun crackle: aim for roughly a dozen pops a second, not one per firing
     const perSec = Math.max(1, rpm / 120 * cfg.offsets.length);
-    const pop = bang > 0 ? bang : (t < this.popUntil && thr < 0.15 ? clamp(14 * (car.pops || 0) / perSec, 0, 0.5) : 0);
+    const pop = bang > 0 ? bang : (t < this.popUntil && thr < 0.15 && rpm > POPCORN_RPM ? clamp(14 * (car.pops || 0) / perSec, 0, 0.5) : 0);
     this.send({ rpm, load: thr, cut: cut ? 1 : 0, pop, retard, mis, cam, lope });
     // retarded timing on the limiter: flames in the header, so open the filter and push the drive
     this.lp.frequency.setTargetAtTime(cfg.lp[0] + rpm * cfg.lp[1] + thr * cfg.lp[2] + retard * 1500, t, 0.01);
@@ -1692,7 +1692,7 @@ const CAMS = {
 const FLYWHEEL = { stock: { up: 1, down: 1 }, light: { up: 1.7, down: 2.1 } };
 function rpmInGear(c, kmh, g) { return kmh / c.gears[g - 1] * c.redline; }
 
-const BLIP_LEN = 0.26;
+const BLIP_LEN = 0.26, POPCORN_RPM = 3500;
 // blip shape: throttle stabbed open fast, revs flare, then fall back onto the lower gear
 function blipEnv() { const p = 1 - Math.max(0, state.blipT) / BLIP_LEN; return p < 0.35 ? p / 0.35 : Math.max(0, (1 - p) / 0.65); }
 function step(dt) {
@@ -1752,7 +1752,7 @@ function step(dt) {
       const upPt = lerp(0.42, 0.97, clamp(state.thr * 1.15, 0, 1)) * c.redline;
       const downPt = lerp(0.24, 0.6, state.thr) * c.redline;
       if (state.shiftCool <= 0) {
-        if (state.gear < c.gears.length && r > upPt) {
+        if (state.gear < c.gears.length && r > upPt && (state.thr > 0.15 || r > 0.97 * c.redline)) { // no short-shifting while coasting: hold the gear and let it pop
           state.gear++; state.shiftTimer = c.shiftTime; state.shiftCool = 0.7; state.upAt = now;
           if (snd && state.thr > 0.7) { // flat-shift: spark cut and heavily retarded (about -20°), it fires hard
             snd.bangFx(0.01, 0.9 + 0.25 * state.agg);
@@ -1799,7 +1799,7 @@ function step(dt) {
     if (state.shiftBoost > 0) { target *= 1 + state.shiftBoost; state.shiftBoost -= dt; }
     if (state.blipT > 0) {
       target *= 1 + state.blipAmt * blipEnv(); state.blipT -= dt;
-      if (state.blipT <= 0 && snd) { snd.pop(0.03, 0.9); if (c.pops && Math.random() < 0.6) snd.bangFx(0.05, 0.45 + 0.2 * Math.random()); }
+      if (state.blipT <= 0 && snd && state.rpm > POPCORN_RPM) { snd.pop(0.03, 0.9); if (c.pops && Math.random() < 0.6) snd.bangFx(0.05, 0.45 + 0.2 * Math.random()); }
     }
   }
   if (!c.ev && state.engine === "on") target = Math.min(target, c.redline + 60);
@@ -1841,7 +1841,7 @@ function step(dt) {
 
   // 6. overrun pops when lifting at high rpm
   if (snd && !c.ev && state.engine === "on" && state.thr < 0.12 && state.thrTarget < 0.1 &&
-      now - state.lastHighThr < 0.25 && state.rpm > 0.45 * c.redline) {
+      now - state.lastHighThr < 0.25 && state.rpm > POPCORN_RPM) {
     state.lastHighThr = -10;
     snd.pop(0.05, 2 + Math.random() * 1.5);
     if (c.pops) { // lift-off crackle: a short run of pops and bangs out of the tailpipe
@@ -1849,6 +1849,16 @@ function step(dt) {
       for (let k = 0; k < n; k++) { snd.bangFx(tt, (0.3 + Math.random() * 0.5) * state.agg / 2.5); tt += 0.04 + Math.random() * 0.14; }
     }
     snd.blowOff();
+  }
+  // popcorn: off throttle in any gear the exhaust keeps crackling all the way down to 3,500 rpm, then goes quiet
+  // "off throttle" = foot off: decelerating in GPS mode (a steady cruise reads ~12 %), real pedal at zero, or free revving
+  const offThr = state.thr < 0.15 && state.thrTarget < 0.15 &&
+    (state.gear === 0 || state.mode === "demo" || (pedalFresh(now) ? pedal.v < 0.05 : state.acc < -0.2));
+  if (snd && !c.ev && state.engine === "on" && offThr && state.rpm > POPCORN_RPM && !state.limCut) {
+    const rn = clamp((state.rpm - POPCORN_RPM) / (c.redline - POPCORN_RPM), 0, 1), pc = c.pops || 0.5;
+    snd.pop(0, 0.35); // keeps the engine's own fine crackle running
+    if (Math.random() < dt * (4 + 7 * rn) * (0.6 + 0.5 * pc)) // the louder pops on top, more of them at high revs
+      snd.bangFx(Math.random() * 0.02, (0.18 + 0.3 * Math.random()) * (0.6 + 0.6 * rn) * state.agg / 2.5);
   }
 
   // 7. push to audio
