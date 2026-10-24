@@ -1788,8 +1788,8 @@ function step(dt) {
   if (!c.ev && state.engine === "on" && state.thr > 0.5) {
     if (!state.limCut && state.limiter <= 0 && state.rpm >= c.redline - 25) {
       const ag = state.agg;
-      if (c.limStyle === "stutter") { // fast "brrrap": ~30 cuts a second, small drops, the dump pipe crackling on every one
-        state.limCut = true; state.limiter = 0.012 + Math.random() * 0.01;
+      if (c.limStyle === "stutter") { // "stu-tu-tu": ~14 cuts a second like Hamad's TB48 video, the dump pipe crackling on some
+        state.limCut = true; state.limiter = 0.03 + Math.random() * 0.012;
         if (snd && snd.bangFx && Math.random() < 0.2 + 0.1 * ag) snd.bangFx(Math.random() * 0.01, 0.35 + 0.18 * ag * Math.random());
       } else {
       state.limCut = true; state.limiter = 0.05 * ag + Math.random() * 0.04 * ag;
@@ -1799,7 +1799,7 @@ function step(dt) {
       }
       }
     } else if (state.limCut && state.limiter <= 0) {
-      state.limCut = false; state.limiter = c.limStyle === "stutter" ? 0.012 + Math.random() * 0.012 : 0.02;
+      state.limCut = false; state.limiter = c.limStyle === "stutter" ? 0.026 + Math.random() * 0.01 : 0.02;
     }
   } else state.limCut = false;
   if (state.limCut) { state.rpm -= c.revDown * (FLYWHEEL[state.fly] || FLYWHEEL.stock).down * (c.limStyle === "stutter" ? 0.8 : 0.6 + 0.4 * state.agg) * dt; state.retard = 1; }
