@@ -1,6 +1,10 @@
 # HMD Sounds pedal dongle
 
-This makes the app follow your real accelerator pedal. GPS still gives the speed, and the dongle gives the throttle. If the dongle drops out, the app switches back to the GPS throttle estimate on its own.
+This makes the app follow your real accelerator pedal and the car's own speed, read from the CAN bus. Speed from the car is instant and works in tunnels. If the dongle drops out, the app switches back to GPS on its own.
+
+There are two ways to run it:
+- **ESP32 dongle** (`hmd_pedal/`): a small permanent box that runs off your phone's hotspot.
+- **Laptop + USB-CAN adapter** (`laptop/hmd_pedal_laptop.py`): good for testing. Use a CANable or another candleLight/slcan adapter on the same Highland cable. Run `pip install python-can paho-mqtt`, then `python3 hmd_pedal_laptop.py --code hamad1`. Add `--sniff` to print the raw frames.
 
 ## Parts (about $20-40)
 - An ESP32 dev board (any ESP32 with Wi-Fi; it has a CAN controller built in)
@@ -23,7 +27,7 @@ Most adapter cables put the vehicle CAN bus on OBD pins 6/14, but check your cab
 ## Flashing
 1. Install Arduino IDE, add the ESP32 boards package, and install the **PubSubClient** library.
 2. Open `hmd_pedal/hmd_pedal.ino`. Set your phone hotspot's name and password, and pick a `PEDAL_CODE` (for example `hamad1`).
-3. Upload it, then open the Serial Monitor at 115200. With the car awake, pressing the pedal should print `pedal 0%` to `pedal 100%`.
+3. Upload it, then open the Serial Monitor at 115200. With the car awake, pressing the pedal should print `pedal 0%` to `pedal 100%` along with the speed.
 
 ## In the app
 Go to Settings → **Pedal link**, type the same code, and press **Connect**. The top bar shows `Pedal 45%` while it's live. The app remembers the code.

@@ -1554,7 +1554,8 @@ function onPos(p) {
 // Pedal link: an ESP32 on the car's CAN bus publishes the real accelerator position (0-100) over MQTT.
 // GPS still sets speed; the pedal sets throttle whenever its data is fresh, and GPS takes over again if it drops out.
 const PEDAL_BROKER = new URLSearchParams(location.search).get("broker") || "wss://broker.hivemq.com:8884/mqtt";
-const pedal = { v: 0, t: -10, client: null, code: store.get("pedalCode", "") };
+const pedal = { v: 0, t: -10, spd: 0, st: -10, acc: 0, client: null, code: store.get("pedalCode", "") };
+function carSpeedFresh(now) { return now - pedal.st < 0.6; }
 function pedalFresh(now) { return now - pedal.t < 0.6; }
 function setPedal(st, label) {
   const p = $("pedalPill"); p.hidden = st === "off"; p.className = "pill " + st; p.lastElementChild.textContent = label;
@@ -1586,9 +1587,14 @@ async function pedalConnect(code) {
     pedal.client = cl;
     cl.on("connect", () => { cl.subscribe("hmdsound/" + code + "/pedal", { qos: 0 }); setPedal("wait", "Pedal: waiting for dongle"); });
     cl.on("message", (_, msg) => {
-      const v = parseFloat(new TextDecoder().decode(msg));
-      if (!isFinite(v)) return;
-      pedal.v = clamp(v / 100, 0, 1); pedal.t = performance.now() / 1000;
+      // payload "pedal%" or "pedal%,speed km/h"
+      const [ps, ss] = new TextDecoder().decode(msg).split(","), v = parseFloat(ps), sp = parseFloat(ss), now = performance.now() / 1000;
+      if (isFinite(v)) { pedal.v = clamp(v / 100, 0, 1); pedal.t = now; }
+      if (isFinite(sp)) { // the car's own wheel speed: instant and exact, unlike GPS
+        const ms = Math.max(0, sp) / 3.6, dt = now - pedal.st;
+        if (dt > 0.01 && dt < 0.6) pedal.acc = lerp(pedal.acc, clamp((ms - pedal.spd) / dt, -12, 12), 0.25);
+        pedal.spd = ms; pedal.st = now;
+      }
     });
     cl.on("error", () => setPedal("err", "Pedal: error"));
     cl.on("offline", () => setPedal("wait", "Pedal: reconnecting"));
@@ -1625,20 +1631,23 @@ function step(dt) {
     state.acc = state.v > 0 ? a : 0;
     state.thrTarget = state.gas && state.engine === "on" ? 1 : 0;
   } else {
-    const age = now - gps.t;
-    if (gps.status === "on" && age < 5) {
+    const age = now - gps.t, carSpd = carSpeedFresh(now);
+    if (carSpd) {
+      state.v = lerp(state.v, pedal.spd, 1 - Math.exp(-dt * 12));
+    } else if (gps.status === "on" && age < 5) {
       const predicted = Math.max(0, gps.speed + gps.accel * Math.min(age, 1.2));
       state.v = lerp(state.v, predicted, 1 - Math.exp(-dt * 4));
     } else {
       state.v = Math.max(0, state.v - 2 * dt);
     }
     let t = 0;
+    const accel = carSpd ? pedal.acc : gps.accel;
     if (state.v > 0.6) {
-      t = gps.accel < -0.5 ? 0.02 : clamp(0.14 + gps.accel * state.sens / 2.5, 0, 1);
+      t = accel < -0.5 ? 0.02 : clamp(0.14 + accel * state.sens / 2.5, 0, 1);
     }
     if (pedalFresh(now)) t = pedal.v; // real pedal beats the GPS estimate
     state.thrTarget = Math.max(t, state.gas ? 1 : 0);
-    state.acc = state.v > 0.6 ? gps.accel : 0;
+    state.acc = state.v > 0.6 ? accel : 0;
   }
 
   // 2. throttle smoothing
@@ -2094,7 +2103,7 @@ $("pedalCode").addEventListener("keydown", (e) => { if (e.key === "Enter") pedal
 setInterval(() => { // live / stale indicator
   if (!pedal.client) return;
   const now = performance.now() / 1000;
-  if (pedalFresh(now)) setPedal("on", "Pedal " + Math.round(pedal.v * 100) + "%");
+  if (pedalFresh(now)) setPedal("on", "Pedal " + Math.round(pedal.v * 100) + "%" + (carSpeedFresh(now) ? " · car speed" : ""));
   else if (pedal.t > 0) setPedal("wait", "Pedal: no data (GPS)");
 }, 250);
 if (pedal.code) pedalConnect(pedal.code);

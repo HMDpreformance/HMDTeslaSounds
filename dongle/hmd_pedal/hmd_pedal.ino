@@ -1,7 +1,8 @@
 // HMD Sounds pedal dongle: ESP32 + CAN transceiver on a Tesla Model 3/Y diagnostic port.
 // It only LISTENS to the car's CAN bus (never transmits), reads the accelerator pedal from
-// message 0x118 (DI_systemStatus, byte 4, 0.4 %/bit), and publishes it over Wi-Fi to MQTT topic
-// hmdsound/<PEDAL_CODE>/pedal. In the app, type the same code under Settings -> Pedal link.
+// message 0x118 (DI_systemStatus, byte 4, 0.4 %/bit) and the car's speed from 0x257
+// (DI_vehicleSpeed, 12 bits from bit 12, 0.08 km/h/bit, -40 offset), and publishes "pedal,speed"
+// over Wi-Fi to MQTT topic hmdsound/<PEDAL_CODE>/pedal. In the app, type the same code under Settings -> Pedal link.
 //
 // Board: any ESP32 (built-in TWAI CAN controller) + SN65HVD230 3.3 V transceiver module.
 // Libraries: PubSubClient (Nick O'Leary) from the Arduino Library Manager.
@@ -23,14 +24,14 @@ WiFiClient net;
 PubSubClient mqtt(net);
 char topic[64];
 int pedal = -1, sent = -1;
+float speed = -1, sentSpeed = -1;   // km/h
 uint32_t lastSend = 0, lastFrame = 0;
 
 void canStart() {
   twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX, CAN_RX, TWAI_MODE_LISTEN_ONLY);
-  g.rx_queue_len = 64;
+  g.rx_queue_len = 256;
   twai_timing_config_t t = TWAI_TIMING_CONFIG_500KBITS();
-  // hardware filter: only accept ID 0x118
-  twai_filter_config_t f = { .acceptance_code = (0x118u << 21), .acceptance_mask = ~(0x7FFu << 21), .single_filter = true };
+  twai_filter_config_t f = TWAI_FILTER_CONFIG_ACCEPT_ALL(); // filtered in software below (0x118 + 0x257)
   twai_driver_install(&g, &t, &f);
   twai_start();
 }
@@ -62,6 +63,9 @@ void loop() {
     if (m.identifier == 0x118 && m.data_length_code >= 5) {
       pedal = min(100, (int)(m.data[4] * 0.4f + 0.5f));
       lastFrame = millis();
+    } else if (m.identifier == 0x257 && m.data_length_code >= 4) {
+      uint32_t raw = ((m.data[1] >> 4) | (m.data[2] << 4)) & 0xFFF;
+      speed = max(0.0f, raw * 0.08f - 40.0f);
     }
   }
   if (!mqtt.connected()) { static uint32_t retry = 0; if (millis() - retry > 2000) { retry = millis(); netUp(); } }
@@ -69,10 +73,11 @@ void loop() {
   uint32_t now = millis();
   // send on change at up to 30 Hz, and a keep-alive every 250 ms so the app knows the link is live
   bool fresh = pedal >= 0 && now - lastFrame < 500;
-  if (fresh && mqtt.connected() && now - lastSend >= 33 && (pedal != sent || now - lastSend >= 250)) {
-    char buf[8]; snprintf(buf, sizeof buf, "%d", pedal);
+  if (fresh && mqtt.connected() && now - lastSend >= 33 && (pedal != sent || fabsf(speed - sentSpeed) >= 0.3f || now - lastSend >= 250)) {
+    char buf[24];
+    if (speed >= 0) snprintf(buf, sizeof buf, "%d,%.1f", pedal, speed); else snprintf(buf, sizeof buf, "%d", pedal);
     mqtt.publish(topic, buf);
-    sent = pedal; lastSend = now;
-    Serial.printf("pedal %d%%\n", pedal);
+    sent = pedal; sentSpeed = speed; lastSend = now;
+    Serial.printf("pedal %d%%  speed %.1f km/h\n", pedal, speed);
   }
 }
